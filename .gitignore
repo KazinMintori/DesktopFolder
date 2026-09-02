@@ -1,0 +1,9 @@
+bin/
+obj/
+*.pdb
+*.user
+*.suo
+DesktopFolders-test.exe
+DesktopFolders-*-test.exe
+drag-diagnostic.log
+icon-preview.png
