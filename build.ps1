@@ -16,6 +16,7 @@ $references = @(
     "$gac\UIAutomationClient\v4.0_4.0.0.0__31bf3856ad364e35\UIAutomationClient.dll",
     "$gac\UIAutomationTypes\v4.0_4.0.0.0__31bf3856ad364e35\UIAutomationTypes.dll"
 )
+$compositionAvailable = $false
 $windowsRuntime = Get-ChildItem -LiteralPath "$gac\System.Runtime.WindowsRuntime" -Recurse -Filter "System.Runtime.WindowsRuntime.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 $systemRuntime = Get-ChildItem -LiteralPath "$gac\System.Runtime" -Recurse -Filter "System.Runtime.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 $vectorsRuntime = Get-ChildItem -LiteralPath "$gac\System.Numerics.Vectors" -Recurse -Filter "System.Numerics.Vectors.dll" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName

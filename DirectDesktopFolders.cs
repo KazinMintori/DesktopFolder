@@ -48,6 +48,9 @@ namespace DesktopFoldersDirect
     {
         public string Path;
         public int OriginalAttributes;
+        // Set for a nested collection. Path is kept as the current shortcut path
+        // so old layouts and shell operations remain compatible.
+        public string GroupId;
     }
 
     internal sealed class VirtualGroup
@@ -62,7 +65,7 @@ namespace DesktopFoldersDirect
 
     internal sealed class VirtualLayout
     {
-        public int Version = 2;
+        public int Version = 3;
         public List<VirtualGroup> Groups = new List<VirtualGroup>();
     }
 
@@ -102,7 +105,7 @@ namespace DesktopFoldersDirect
                 if (File.Exists(VirtualLayoutPath))
                 {
                     VirtualLayout layout = Json.Deserialize<VirtualLayout>(File.ReadAllText(VirtualLayoutPath));
-                    if (layout != null && layout.Groups != null) return layout;
+                    if (layout != null && layout.Groups != null) { VirtualLayoutGraph.Normalize(layout); return layout; }
                 }
             }
             catch { }
@@ -111,6 +114,7 @@ namespace DesktopFoldersDirect
 
         internal static void SaveVirtualLayout(VirtualLayout layout)
         {
+            VirtualLayoutGraph.Normalize(layout);
             Directory.CreateDirectory(DataDirectory);
             string temporary = VirtualLayoutPath + ".tmp";
             File.WriteAllText(temporary, Json.Serialize(layout));
@@ -124,7 +128,7 @@ namespace DesktopFoldersDirect
 
         internal static bool IsVirtualMember(string path)
         {
-            return LoadVirtualLayout().Groups.Any(g => g.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
+            return !String.IsNullOrEmpty(path) && LoadVirtualLayout().Groups.Any(g => g.Members.Any(m => !String.IsNullOrEmpty(m.Path) && m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
         }
 
         internal static string SerializeVirtualLayout(VirtualLayout layout) { return Json.Serialize(layout); }
@@ -159,6 +163,114 @@ namespace DesktopFoldersDirect
             }
             catch { }
             return requests.ToArray();
+        }
+    }
+
+    internal static class VirtualLayoutGraph
+    {
+        internal static void Normalize(VirtualLayout layout)
+        {
+            if (layout == null) return;
+            if (layout.Groups == null) layout.Groups = new List<VirtualGroup>();
+            layout.Version = Math.Max(3, layout.Version);
+            foreach (VirtualGroup parent in layout.Groups)
+            {
+                if (parent.Members == null) parent.Members = new List<VirtualMember>();
+                if (parent.Pinned == null) parent.Pinned = new List<string>();
+                foreach (VirtualMember member in parent.Members)
+                {
+                    if (member == null) continue;
+                    string oldPath = member.Path;
+                    VirtualGroup child = null;
+                    if (!String.IsNullOrEmpty(member.GroupId)) child = layout.Groups.FirstOrDefault(g => String.Equals(g.Id, member.GroupId, StringComparison.OrdinalIgnoreCase));
+                    if (child == null && !String.IsNullOrEmpty(member.Path)) child = layout.Groups.FirstOrDefault(g => !String.IsNullOrEmpty(g.TilePath) && g.TilePath.Equals(member.Path, StringComparison.OrdinalIgnoreCase));
+                    if (child == null) continue;
+                    member.GroupId = child.Id; member.Path = child.TilePath;
+                    if (!String.IsNullOrEmpty(oldPath) && !oldPath.Equals(member.Path, StringComparison.OrdinalIgnoreCase))
+                        ReplacePinnedPath(parent, oldPath, member.Path);
+                }
+            }
+        }
+
+        internal static VirtualGroup ResolveMemberGroup(VirtualLayout layout, VirtualMember member)
+        {
+            if (layout == null || member == null) return null;
+            if (!String.IsNullOrEmpty(member.GroupId))
+            {
+                VirtualGroup byId = layout.Groups.FirstOrDefault(g => String.Equals(g.Id, member.GroupId, StringComparison.OrdinalIgnoreCase));
+                if (byId != null) return byId;
+            }
+            return String.IsNullOrEmpty(member.Path) ? null : layout.Groups.FirstOrDefault(g => !String.IsNullOrEmpty(g.TilePath) && g.TilePath.Equals(member.Path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static VirtualGroup ResolveTileGroup(VirtualLayout layout, string path)
+        {
+            return layout == null || String.IsNullOrEmpty(path) ? null : layout.Groups.FirstOrDefault(g => !String.IsNullOrEmpty(g.TilePath) && g.TilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static bool ContainsGroup(VirtualLayout layout, string ancestorId, string candidateId)
+        {
+            return ContainsGroup(layout, ancestorId, candidateId, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        }
+
+        static bool ContainsGroup(VirtualLayout layout, string ancestorId, string candidateId, HashSet<string> visited)
+        {
+            if (String.IsNullOrEmpty(ancestorId) || String.IsNullOrEmpty(candidateId) || !visited.Add(ancestorId)) return false;
+            VirtualGroup ancestor = layout.Groups.FirstOrDefault(g => String.Equals(g.Id, ancestorId, StringComparison.OrdinalIgnoreCase));
+            if (ancestor == null) return false;
+            foreach (VirtualMember member in ancestor.Members)
+            {
+                VirtualGroup child = ResolveMemberGroup(layout, member); if (child == null) continue;
+                if (String.Equals(child.Id, candidateId, StringComparison.OrdinalIgnoreCase) || ContainsGroup(layout, child.Id, candidateId, visited)) return true;
+            }
+            return false;
+        }
+
+        internal static bool WouldCreateCycle(VirtualLayout layout, string childId, string destinationParentId)
+        {
+            return String.Equals(childId, destinationParentId, StringComparison.OrdinalIgnoreCase) || ContainsGroup(layout, childId, destinationParentId);
+        }
+
+        internal static List<VirtualGroup> ParentsOf(VirtualLayout layout, string childId)
+        {
+            VirtualGroup child = layout.Groups.FirstOrDefault(g => String.Equals(g.Id, childId, StringComparison.OrdinalIgnoreCase));
+            if (child == null) return new List<VirtualGroup>();
+            return layout.Groups.Where(parent => parent.Members.Any(member => String.Equals(member.GroupId, childId, StringComparison.OrdinalIgnoreCase) || (!String.IsNullOrEmpty(member.Path) && member.Path.Equals(child.TilePath, StringComparison.OrdinalIgnoreCase)))).ToList();
+        }
+
+        internal static bool IsNested(VirtualLayout layout, string groupId) { return ParentsOf(layout, groupId).Count > 0; }
+
+        internal static void ReplaceTilePath(VirtualLayout layout, string childId, string oldPath, string newPath)
+        {
+            foreach (VirtualGroup parent in layout.Groups)
+            {
+                foreach (VirtualMember member in parent.Members)
+                {
+                    if (String.Equals(member.GroupId, childId, StringComparison.OrdinalIgnoreCase) || (!String.IsNullOrEmpty(oldPath) && String.Equals(member.Path, oldPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        member.GroupId = childId; member.Path = newPath; ReplacePinnedPath(parent, oldPath, newPath);
+                    }
+                }
+            }
+        }
+
+        static void ReplacePinnedPath(VirtualGroup parent, string oldPath, string newPath)
+        {
+            for (int i = 0; i < parent.Pinned.Count; i++) if (String.Equals(parent.Pinned[i], oldPath, StringComparison.OrdinalIgnoreCase)) parent.Pinned[i] = newPath;
+        }
+
+        internal static void RefreshGroupAndAncestors(VirtualLayout layout, string groupId)
+        {
+            RefreshGroupAndAncestors(layout, groupId, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        }
+
+        static void RefreshGroupAndAncestors(VirtualLayout layout, string groupId, HashSet<string> visited)
+        {
+            if (layout == null || String.IsNullOrEmpty(groupId) || !visited.Add(groupId)) return;
+            VirtualGroup group = layout.Groups.FirstOrDefault(g => String.Equals(g.Id, groupId, StringComparison.OrdinalIgnoreCase));
+            if (group == null) return;
+            try { GroupTileFactory.CreateOrUpdate(group); } catch { }
+            foreach (VirtualGroup parent in ParentsOf(layout, groupId)) RefreshGroupAndAncestors(layout, parent.Id, visited);
         }
     }
 
@@ -231,14 +343,24 @@ namespace DesktopFoldersDirect
         internal const int WM_RBUTTONDOWN = 0x0204;
         internal const int WM_MBUTTONDOWN = 0x0207;
         internal const int WM_CANCELMODE = 0x001F;
+        internal const int WM_MOUSEACTIVATE = 0x0021;
         internal const int WM_COPYDATA = 0x004A;
+        internal const int WM_NCHITTEST = 0x0084;
+        internal const int HTTRANSPARENT = -1;
+        internal const int MA_ACTIVATE = 1;
         internal const int WS_EX_TRANSPARENT = 0x20;
         internal const int WS_EX_TOOLWINDOW = 0x80;
         internal const int WS_EX_NOACTIVATE = 0x08000000;
+        internal const int CS_DROPSHADOW = 0x00020000;
+        internal const uint SWP_NOSIZE = 0x0001;
+        internal const uint SWP_NOZORDER = 0x0004;
+        internal const uint SWP_NOACTIVATE = 0x0010;
+        internal const uint SWP_NOOWNERZORDER = 0x0200;
         internal const int VK_LBUTTON = 0x01;
         internal const byte VK_ESCAPE = 0x1B;
         internal const uint KEYEVENTF_KEYUP = 0x0002;
         internal const uint SHCNE_ASSOCCHANGED = 0x08000000;
+        internal const uint SHCNE_DELETE = 0x00000004;
         internal const uint SHCNE_UPDATEITEM = 0x00002000;
         internal const uint SHCNE_ATTRIBUTES = 0x00000800;
         internal const uint SHCNF_IDLIST = 0x0000;
@@ -262,10 +384,13 @@ namespace DesktopFoldersDirect
         [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int virtualKey);
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] internal static extern IntPtr SetFocus(IntPtr window);
+        [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(IntPtr window);
+        [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
         [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
         [DllImport("user32.dll")] internal static extern IntPtr WindowFromPoint(POINT point);
         [DllImport("user32.dll")] internal static extern bool IsChild(IntPtr parent, IntPtr child);
         [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out RECT rectangle);
+        [DllImport("user32.dll")] internal static extern bool UpdateWindow(IntPtr window);
         [DllImport("user32.dll")] internal static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
         [DllImport("kernel32.dll", CharSet = CharSet.Auto)] internal static extern IntPtr GetModuleHandle(string moduleName);
         [DllImport("psapi.dll")] internal static extern bool EmptyWorkingSet(IntPtr process);
@@ -283,7 +408,119 @@ namespace DesktopFoldersDirect
         internal static readonly string[] DesktopRoots = FindDesktopRoots();
         internal static string ScanStatus = "Chưa quét Desktop";
         static IntPtr cachedListView;
+        static readonly object PlacementLock = new object();
+        static readonly Queue<DesktopPlacement> PlacementQueue = new Queue<DesktopPlacement>();
+        static bool placementWorkerActive;
         internal static IntPtr CachedListView { get { return cachedListView; } }
+
+        sealed class DesktopPlacement
+        {
+            internal string Path;
+            internal Point PreferredScreenPoint;
+        }
+
+        internal static void QueuePlacement(string path, Point preferredScreenPoint)
+        {
+            if (String.IsNullOrEmpty(path)) return;
+            lock (PlacementLock)
+            {
+                PlacementQueue.Enqueue(new DesktopPlacement { Path = path, PreferredScreenPoint = preferredScreenPoint });
+                if (placementWorkerActive) return; placementWorkerActive = true;
+            }
+            Thread worker = new Thread(new ThreadStart(ProcessPlacementQueue)); worker.IsBackground = true; worker.Name = "DesktopFolders shell placement"; worker.SetApartmentState(ApartmentState.STA); worker.Start();
+        }
+
+        static void ProcessPlacementQueue()
+        {
+            while (true)
+            {
+                DesktopPlacement placement;
+                lock (PlacementLock)
+                {
+                    if (PlacementQueue.Count == 0) { placementWorkerActive = false; return; }
+                    placement = PlacementQueue.Dequeue();
+                }
+                bool placed = false;
+                for (int attempt = 0; attempt < 18 && !placed; attempt++)
+                {
+                    if (!File.Exists(placement.Path)) break;
+                    NotifyPathChanged(placement.Path);
+                    placed = TryPlaceAtNearestFreeSlot(placement.Path, placement.PreferredScreenPoint);
+                    if (!placed) Thread.Sleep(35 + attempt * 12);
+                }
+                DataStore.LogDrag("DESKTOP_PLACE path=" + placement.Path + " placed=" + placed);
+            }
+        }
+
+        internal static bool TryPlaceAtNearestFreeSlot(string path, Point preferredScreenPoint)
+        {
+            IntPtr list = cachedListView == IntPtr.Zero ? GetListView() : cachedListView; if (list == IntPtr.Zero) return false; cachedListView = list;
+            object shellWindows = null, desktopDispatch = null, browserObject = null, viewObject = null, folderObject = null; IntPtr browserPointer = IntPtr.Zero, viewPointer = IntPtr.Zero, targetItem = IntPtr.Zero; List<IntPtr> enumeratedItems = new List<IntPtr>();
+            try
+            {
+                shellWindows = new ShellWindowsObject(); IShellWindowsNative windows = (IShellWindowsNative)shellWindows; object location = 0, locationRoot = Type.Missing; int desktopWindow;
+                desktopDispatch = windows.FindWindowSW(ref location, ref locationRoot, 8, out desktopWindow, 1); if (desktopDispatch == null) { DataStore.LogDrag("SHELL_PLACE no desktop dispatch"); return false; }
+                IServiceProviderNative provider = desktopDispatch as IServiceProviderNative; if (provider == null) { DataStore.LogDrag("SHELL_PLACE no service provider"); return false; }
+                Guid browserService = new Guid("4C96BE40-915C-11CF-99D3-00AA004AE837"), browserId = typeof(IShellBrowserNative).GUID;
+                int serviceResult = provider.QueryService(ref browserService, ref browserId, out browserPointer); if (serviceResult < 0 || browserPointer == IntPtr.Zero) { DataStore.LogDrag("SHELL_PLACE QueryService=" + serviceResult); return false; }
+                browserObject = Marshal.GetObjectForIUnknown(browserPointer); Marshal.Release(browserPointer); browserPointer = IntPtr.Zero; IShellBrowserNative browser = (IShellBrowserNative)browserObject;
+                int viewResult = browser.QueryActiveShellView(out viewPointer); if (viewResult < 0 || viewPointer == IntPtr.Zero) { DataStore.LogDrag("SHELL_PLACE QueryActiveShellView=" + viewResult); return false; }
+                viewObject = Marshal.GetObjectForIUnknown(viewPointer); Marshal.Release(viewPointer); viewPointer = IntPtr.Zero; IFolderViewNative view = (IFolderViewNative)viewObject;
+                Guid folderId = typeof(IShellFolderNative).GUID; int folderResult = view.GetFolder(ref folderId, out folderObject); if (folderResult < 0 || folderObject == null) { DataStore.LogDrag("SHELL_PLACE GetFolder=" + folderResult); return false; } IShellFolderNative folder = (IShellFolderNative)folderObject;
+                string parsingName = Path.GetFileName(path); uint eaten = 0, attributes = 0; int parseResult = folder.ParseDisplayName(IntPtr.Zero, IntPtr.Zero, parsingName, ref eaten, out targetItem, ref attributes); if (parseResult < 0 || targetItem == IntPtr.Zero) { DataStore.LogDrag("SHELL_PLACE Parse=" + parseResult + " path=" + path); return false; }
+                Native.POINT currentPosition; int positionResult = view.GetItemPosition(targetItem, out currentPosition); if (positionResult < 0) { DataStore.LogDrag("SHELL_PLACE GetItemPosition=" + positionResult); return false; }
+                int count; int countResult = view.ItemCount(2, out count); if (countResult < 0 || count <= 0) { DataStore.LogDrag("SHELL_PLACE ItemCount=" + countResult + " count=" + count); return false; }
+
+                List<Point> occupied = new List<Point>();
+                for (int index = 0; index < count; index++)
+                {
+                    IntPtr item; if (view.Item(index, out item) < 0 || item == IntPtr.Zero) continue; enumeratedItems.Add(item);
+                    int comparison = folder.CompareIDs(IntPtr.Zero, item, targetItem); if (unchecked((short)(comparison & 0xFFFF)) == 0) continue;
+                    Native.POINT position; if (view.GetItemPosition(item, out position) >= 0) occupied.Add(new Point(position.x, position.y));
+                }
+
+                Native.POINT spacing = new Native.POINT(); if (view.GetSpacing(ref spacing) < 0) view.GetDefaultSpacing(out spacing); int spacingX = spacing.x, spacingY = spacing.y;
+                if (spacingX < 40 || spacingX > 320) spacingX = 96; if (spacingY < 40 || spacingY > 320) spacingY = 112;
+                Native.RECT client; if (!Native.GetWindowRect(list, out client)) return false; Native.POINT preferred = new Native.POINT { x = preferredScreenPoint.X - client.left, y = preferredScreenPoint.Y - client.top };
+                int originX = occupied.Count == 0 ? 0 : PositiveModulo(occupied.Min(point => point.X), spacingX); int originY = occupied.Count == 0 ? 0 : PositiveModulo(occupied.Min(point => point.Y), spacingY);
+                int columns = Math.Max(1, (client.right - client.left - originX) / spacingX), rows = Math.Max(1, (client.bottom - client.top - originY) / spacingY);
+                int preferredColumn = Math.Max(0, Math.Min(columns - 1, (int)Math.Round((preferred.x - originX - spacingX * .5) / spacingX))); int preferredRow = Math.Max(0, Math.Min(rows - 1, (int)Math.Round((preferred.y - originY - spacingY * .5) / spacingY)));
+                Point free = Point.Empty; bool found = false;
+                for (int radius = 0; radius < columns + rows && !found; radius++)
+                {
+                    for (int dx = -radius; dx <= radius && !found; dx++)
+                    {
+                        int dyMagnitude = radius - Math.Abs(dx);
+                        foreach (int dy in dyMagnitude == 0 ? new int[] { 0 } : new int[] { -dyMagnitude, dyMagnitude })
+                        {
+                            int column = preferredColumn + dx, row = preferredRow + dy; if (column < 0 || column >= columns || row < 0 || row >= rows) continue;
+                            Point candidate = new Point(originX + column * spacingX, originY + row * spacingY);
+                            if (occupied.Any(point => Math.Abs(point.X - candidate.X) < spacingX / 2 && Math.Abs(point.Y - candidate.Y) < spacingY / 2)) continue;
+                            free = candidate; found = true; break;
+                        }
+                    }
+                }
+                if (!found) return false;
+                Native.POINT requested = new Native.POINT { x = free.X, y = free.Y }; int positionedResult = view.SelectAndPositionItems(1, new IntPtr[] { targetItem }, new Native.POINT[] { requested }, 0x80); if (positionedResult < 0) { DataStore.LogDrag("SHELL_PLACE SelectAndPositionItems=" + positionedResult); return false; }
+                Native.POINT actualPosition; bool positioned = view.GetItemPosition(targetItem, out actualPosition) >= 0;
+                if (positioned)
+                {
+                    Point actual = new Point(actualPosition.x, actualPosition.y); positioned = Math.Abs(actual.X - free.X) <= 2 && Math.Abs(actual.Y - free.Y) <= 2;
+                    if (!positioned) positioned = !occupied.Any(point => Math.Abs(point.X - actual.X) < spacingX / 2 && Math.Abs(point.Y - actual.Y) < spacingY / 2);
+                }
+                if (positioned) Native.UpdateWindow(list);
+                return positioned;
+            }
+            catch (Exception error) { DataStore.LogDrag("SHELL_PLACE exception=" + error); return false; }
+            finally
+            {
+                foreach (IntPtr item in enumeratedItems) if (item != IntPtr.Zero) Marshal.FreeCoTaskMem(item);
+                if (targetItem != IntPtr.Zero) Marshal.FreeCoTaskMem(targetItem);
+                if (viewPointer != IntPtr.Zero) Marshal.Release(viewPointer); if (browserPointer != IntPtr.Zero) Marshal.Release(browserPointer);
+                foreach (object value in new object[] { folderObject, viewObject, browserObject, desktopDispatch, shellWindows }) try { if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value); } catch { }
+            }
+        }
+        static int PositiveModulo(int value, int divisor) { int result = value % divisor; return result < 0 ? result + divisor : result; }
 
         internal static bool IsDesktopForeground()
         {
@@ -357,6 +594,18 @@ namespace DesktopFoldersDirect
                     Native.SHChangeNotify(Native.SHCNE_ATTRIBUTES, Native.SHCNF_PATHW, item, IntPtr.Zero);
                     Native.SHChangeNotify(Native.SHCNE_UPDATEITEM, Native.SHCNF_PATHW, item, IntPtr.Zero);
                 }
+            }
+            catch { }
+            finally { if (item != IntPtr.Zero) Marshal.FreeHGlobal(item); }
+        }
+
+        internal static void NotifyPathDeleted(string path)
+        {
+            IntPtr item = IntPtr.Zero;
+            try
+            {
+                if (String.IsNullOrEmpty(path)) return; item = Marshal.StringToHGlobalUni(path); Native.SHChangeNotify(Native.SHCNE_DELETE, Native.SHCNF_PATHW, item, IntPtr.Zero);
+                IntPtr list = cachedListView == IntPtr.Zero ? GetListView() : cachedListView; if (list != IntPtr.Zero) Native.UpdateWindow(list);
             }
             catch { }
             finally { if (item != IntPtr.Zero) Marshal.FreeHGlobal(item); }
@@ -493,6 +742,14 @@ namespace DesktopFoldersDirect
                 return new Bitmap(loaded);
             }
         }
+        internal static void Invalidate(string path)
+        {
+            lock (CacheLock)
+            {
+                Bitmap cached; if (!Cache.TryGetValue(path ?? "", out cached)) return;
+                Cache.Remove(path ?? ""); cached.Dispose();
+            }
+        }
     }
 
     [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
@@ -528,6 +785,8 @@ namespace DesktopFoldersDirect
             if (String.IsNullOrEmpty(group.IconPath)) group.IconPath = Path.Combine(DataStore.DataDirectory, "icons", group.Id + ".ico");
             Directory.CreateDirectory(Path.GetDirectoryName(group.IconPath));
             CreateCompositeIcon(group, group.IconPath);
+            FileAttributes? preservedAttributes = null;
+            try { if (File.Exists(group.TilePath)) preservedAttributes = File.GetAttributes(group.TilePath); } catch { }
             IShellLinkW link = (IShellLinkW)new ShellLinkObject();
             link.SetPath(Application.ExecutablePath);
             link.SetArguments("--open-group \"" + group.Id + "\"");
@@ -535,6 +794,10 @@ namespace DesktopFoldersDirect
             link.SetWorkingDirectory(Path.GetDirectoryName(Application.ExecutablePath));
             link.SetIconLocation(group.IconPath, 0);
             ((IPersistFile)link).Save(group.TilePath, false);
+            // Rewriting a nested collection shortcut must not make it reappear on
+            // the Desktop. Some shell-link implementations clear Hidden on save.
+            try { if (preservedAttributes.HasValue) File.SetAttributes(group.TilePath, preservedAttributes.Value); } catch { }
+            IconLoader.Invalidate(group.TilePath);
             ExplorerDesktop.NotifyPathChanged(group.TilePath);
         }
 
@@ -659,6 +922,62 @@ namespace DesktopFoldersDirect
         protected override void Dispose(bool disposing) { if (disposing) animation.Dispose(); base.Dispose(disposing); }
     }
 
+    [ComImport, Guid("9BA05972-F6A8-11CF-A442-00A0C90A8F39")]
+    internal class ShellWindowsObject { }
+
+    [ComImport, Guid("85CB6900-4D95-11CF-960C-0080C7F4EE85"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+    internal interface IShellWindowsNative
+    {
+        [DispId(1610743816)]
+        [return: MarshalAs(UnmanagedType.IDispatch)]
+        object FindWindowSW([In] ref object location, [In] ref object locationRoot, int windowClass, out int windowHandle, int options);
+    }
+
+    [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IServiceProviderNative
+    {
+        [PreserveSig] int QueryService(ref Guid service, ref Guid interfaceId, out IntPtr result);
+    }
+
+    [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellBrowserNative
+    {
+        [PreserveSig] int GetWindow(out IntPtr window);
+        [PreserveSig] int ContextSensitiveHelp(bool enterMode);
+        [PreserveSig] int InsertMenusSB(IntPtr sharedMenu, IntPtr menuWidths);
+        [PreserveSig] int SetMenuSB(IntPtr sharedMenu, IntPtr oleMenu, IntPtr activeWindow);
+        [PreserveSig] int RemoveMenusSB(IntPtr sharedMenu);
+        [PreserveSig] int SetStatusTextSB([MarshalAs(UnmanagedType.LPWStr)] string statusText);
+        [PreserveSig] int EnableModelessSB(bool enable);
+        [PreserveSig] int TranslateAcceleratorSB(IntPtr message, ushort id);
+        [PreserveSig] int BrowseObject(IntPtr itemIdList, uint flags);
+        [PreserveSig] int GetViewStateStream(uint mode, out IntPtr stream);
+        [PreserveSig] int GetControlWindow(uint id, out IntPtr window);
+        [PreserveSig] int SendControlMsg(uint id, uint message, IntPtr wParam, IntPtr lParam, out IntPtr result);
+        [PreserveSig] int QueryActiveShellView(out IntPtr shellView);
+        [PreserveSig] int OnViewWindowActive(IntPtr shellView);
+        [PreserveSig] int SetToolbarItems(IntPtr buttons, uint buttonCount, uint flags);
+    }
+
+    [ComImport, Guid("cde725b0-ccc9-4519-917e-325d72fab4ce"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IFolderViewNative
+    {
+        [PreserveSig] int GetCurrentViewMode(out uint viewMode);
+        [PreserveSig] int SetCurrentViewMode(uint viewMode);
+        [PreserveSig] int GetFolder(ref Guid interfaceId, [MarshalAs(UnmanagedType.Interface)] out object result);
+        [PreserveSig] int Item(int itemIndex, out IntPtr itemIdList);
+        [PreserveSig] int ItemCount(uint flags, out int count);
+        [PreserveSig] int Items(uint flags, ref Guid interfaceId, out IntPtr result);
+        [PreserveSig] int GetSelectionMarkedItem(out int itemIndex);
+        [PreserveSig] int GetFocusedItem(out int itemIndex);
+        [PreserveSig] int GetItemPosition(IntPtr itemIdList, out Native.POINT point);
+        [PreserveSig] int GetSpacing(ref Native.POINT point);
+        [PreserveSig] int GetDefaultSpacing(out Native.POINT point);
+        [PreserveSig] int GetAutoArrange();
+        [PreserveSig] int SelectItem(int itemIndex, uint flags);
+        [PreserveSig] int SelectAndPositionItems(uint count, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)] IntPtr[] itemIdLists, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 0)] Native.POINT[] points, uint flags);
+    }
+
     [ComImport, Guid("000214E6-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IShellFolderNative
     {
@@ -701,7 +1020,7 @@ namespace DesktopFoldersDirect
 
     internal static class ShellContextMenu
     {
-        const uint PinCommand = 1, MoveOutCommand = 2, ShellFirstCommand = 0x1000, ShellLastCommand = 0x7FFF;
+        const uint PinCommand = 1, MoveOutCommand = 2, MoveBeforeCommand = 3, MoveAfterCommand = 4, ShellFirstCommand = 0x1000, ShellLastCommand = 0x7FFF;
         const uint MfByPosition = 0x00000400, MfString = 0, MfSeparator = 0x00000800;
         const uint TpmRightButton = 0x0002, TpmReturnCommand = 0x0100;
         const uint CmicMaskUnicode = 0x00004000, CmicMaskPointInvoke = 0x20000000;
@@ -728,7 +1047,7 @@ namespace DesktopFoldersDirect
         [DllImport("user32.dll")] static extern uint TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr owner, IntPtr parameters);
         [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr menu);
 
-        internal static void Show(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction)
+        internal static void Show(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
             if (owner == null || owner.IsDisposed || String.IsNullOrEmpty(path)) return;
             IntPtr absolute = IntPtr.Zero, menu = IntPtr.Zero; IShellFolderNative parent = null; object rawContext = null;
@@ -738,13 +1057,16 @@ namespace DesktopFoldersDirect
                 Guid folderId = typeof(IShellFolderNative).GUID; IntPtr child; if (SHBindToParent(absolute, ref folderId, out parent, out child) < 0 || parent == null) throw new InvalidOperationException("Shell parent unavailable.");
                 Guid contextId = typeof(IContextMenuNative).GUID; if (parent.GetUIObjectOf(owner.Handle, 1, new IntPtr[] { child }, ref contextId, IntPtr.Zero, out rawContext) < 0 || rawContext == null) throw new InvalidOperationException("Shell context menu unavailable.");
                 IContextMenuNative context = (IContextMenuNative)rawContext; menu = CreatePopupMenu(); if (menu == IntPtr.Zero) throw new InvalidOperationException("Popup menu unavailable.");
-                InsertMenu(menu, 0, MfByPosition | MfString, (UIntPtr)PinCommand, pinText); InsertMenu(menu, 1, MfByPosition | MfString, (UIntPtr)MoveOutCommand, "Đưa ra Desktop"); InsertMenu(menu, 2, MfByPosition | MfSeparator, UIntPtr.Zero, null);
-                context.QueryContextMenu(menu, 3, ShellFirstCommand, ShellLastCommand, 0);
+                InsertMenu(menu, 0, MfByPosition | MfString, (UIntPtr)PinCommand, pinText); InsertMenu(menu, 1, MfByPosition | MfString, (UIntPtr)MoveOutCommand, "Đưa ra Desktop");
+                InsertMenu(menu, 2, MfByPosition | MfSeparator, UIntPtr.Zero, null); InsertMenu(menu, 3, MfByPosition | MfString, (UIntPtr)MoveBeforeCommand, "Di chuyển về trước"); InsertMenu(menu, 4, MfByPosition | MfString, (UIntPtr)MoveAfterCommand, "Di chuyển về sau"); InsertMenu(menu, 5, MfByPosition | MfSeparator, UIntPtr.Zero, null);
+                context.QueryContextMenu(menu, 6, ShellFirstCommand, ShellLastCommand, 0);
                 using (ShellMenuMessageWindow messages = new ShellMenuMessageWindow(owner.Handle, rawContext))
                 {
                     Point point = Cursor.Position; DataStore.LogDrag("SHELL_MENU native path=" + path); uint selected = TrackPopupMenuEx(menu, TpmRightButton | TpmReturnCommand, point.X, point.Y, owner.Handle, IntPtr.Zero); DataStore.LogDrag("SHELL_MENU selected=" + selected);
                     if (selected == PinCommand) { if (pinAction != null) pinAction(); }
                     else if (selected == MoveOutCommand) { if (moveOutAction != null) moveOutAction(); }
+                    else if (selected == MoveBeforeCommand) { if (moveBeforeAction != null) moveBeforeAction(); }
+                    else if (selected == MoveAfterCommand) { if (moveAfterAction != null) moveAfterAction(); }
                     else if (selected >= ShellFirstCommand && selected <= ShellLastCommand)
                     {
                         IntPtr verb = (IntPtr)(selected - ShellFirstCommand); CommandInfo command = new CommandInfo { cbSize = Marshal.SizeOf(typeof(CommandInfo)), fMask = CmicMaskUnicode | CmicMaskPointInvoke, hwnd = owner.Handle, lpVerb = verb, lpVerbW = verb, nShow = 1, ptInvoke = new Native.POINT { x = point.X, y = point.Y } };
@@ -752,15 +1074,15 @@ namespace DesktopFoldersDirect
                     }
                 }
             }
-            catch (Exception error) { DataStore.LogDrag("SHELL_MENU fallback=" + error); ShowFallback(owner, path, pinText, pinAction, moveOutAction); }
+            catch (Exception error) { DataStore.LogDrag("SHELL_MENU fallback=" + error); ShowFallback(owner, path, pinText, pinAction, moveOutAction, moveBeforeAction, moveAfterAction); }
             finally
             {
                 if (menu != IntPtr.Zero) DestroyMenu(menu); if (rawContext != null && Marshal.IsComObject(rawContext)) Marshal.FinalReleaseComObject(rawContext); if (parent != null && Marshal.IsComObject(parent)) Marshal.FinalReleaseComObject(parent); if (absolute != IntPtr.Zero) Marshal.FreeCoTaskMem(absolute);
             }
         }
-        static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction)
+        static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
-            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
+            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Di chuyển về trước", null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add("Di chuyển về sau", null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
         }
 
         sealed class ShellMenuMessageWindow : NativeWindow, IDisposable
@@ -788,6 +1110,7 @@ namespace DesktopFoldersDirect
 
     internal sealed class AppTile : Panel
     {
+        internal event EventHandler ItemActivated;
         readonly Image icon;
         readonly string label;
         readonly bool pinned;
@@ -799,6 +1122,8 @@ namespace DesktopFoldersDirect
         bool hot;
         bool dragOver;
         bool dragging;
+        bool nestingTarget;
+        ContextMenuStrip immediateContextMenu;
         internal string ItemPath { get; private set; }
 
         internal AppTile(string path, bool isPinned, bool grid, int width, bool reducedMotion)
@@ -809,13 +1134,27 @@ namespace DesktopFoldersDirect
             TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? "Đã ghim ưu tiên" : "";
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         }
-        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) Focus(); base.OnMouseDown(e); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left) Focus();
+            else if (e.Button == MouseButtons.Right && immediateContextMenu != null) { Focus(); immediateContextMenu.Show(this, e.Location); }
+            base.OnMouseDown(e);
+        }
+        internal void SetImmediateContextMenu(ContextMenuStrip menu) { immediateContextMenu = menu; if (immediateContextMenu != null) immediateContextMenu.CreateControl(); }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            // Control.Click also fires for a completed right-click on WinForms.
+            // Activation is deliberately restricted to primary-button clicks.
+            if (e.Button == MouseButtons.Left) RaiseItemActivated();
+        }
         protected override void OnMouseEnter(EventArgs e) { hot = true; BeginHoverTransition(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; BeginHoverTransition(); base.OnMouseLeave(e); }
         protected override void OnGotFocus(EventArgs e) { BeginHoverTransition(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { BeginHoverTransition(); base.OnLostFocus(e); }
-        protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { OnClick(EventArgs.Empty); e.Handled = true; } base.OnKeyDown(e); }
-        internal void SetDragVisual(bool isDragging, bool isDropTarget) { dragging = isDragging; dragOver = isDropTarget; BeginHoverTransition(); }
+        protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { RaiseItemActivated(); e.Handled = true; e.SuppressKeyPress = true; } base.OnKeyDown(e); }
+        void RaiseItemActivated() { EventHandler activated = ItemActivated; if (activated != null) activated(this, EventArgs.Empty); }
+        internal void SetDragVisual(bool isDragging, bool isDropTarget, bool isNestingTarget = false) { dragging = isDragging; dragOver = isDropTarget; nestingTarget = isNestingTarget; BeginHoverTransition(); }
         void BeginHoverTransition()
         {
             float target = hot || dragOver || Focused ? 1f : 0f;
@@ -835,6 +1174,12 @@ namespace DesktopFoldersDirect
             float interaction = Math.Max(0f, Math.Min(1f, hoverProgress)); int inset = 3 - (int)Math.Round(interaction * 2f);
             int maximumCardHeight = gridMode ? (Width < 170 ? 76 : 100) : Height - 1;
             Rectangle card = new Rectangle(inset, inset, Math.Max(8, Width - inset * 2 - 1), Math.Max(8, maximumCardHeight - (inset - 1) * 2));
+            if (dragging)
+            {
+                using (Brush placeholder = new SolidBrush(Color.FromArgb(22, CollectionTheme.Focus))) e.Graphics.FillRoundedRectangle(placeholder, card, CollectionTheme.RadiusCard);
+                using (Pen placeholderEdge = new Pen(Color.FromArgb(105, CollectionTheme.Focus), 1.5f)) { placeholderEdge.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash; e.Graphics.DrawRoundedRectangle(placeholderEdge, Rectangle.Inflate(card, -1, -1), CollectionTheme.RadiusCard - 1); }
+                return;
+            }
             Color top = Mix(CollectionTheme.Surface, accent, .23f + .11f * interaction);
             Color bottom = Mix(CollectionTheme.Surface, accent, .08f + .07f * interaction);
             using (System.Drawing.Drawing2D.LinearGradientBrush fill = new System.Drawing.Drawing2D.LinearGradientBrush(card, top, bottom, 90f)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
@@ -849,6 +1194,11 @@ namespace DesktopFoldersDirect
             }
             Color idleEdge = Mix(CollectionTheme.Stroke, accent, .34f); Color edgeColor = Mix(idleEdge, accent, .72f * interaction);
             using (Pen edge = new Pen(edgeColor, dragOver ? 2f : 1f + .35f * interaction)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
+            if (nestingTarget)
+            {
+                using (Brush nestFill = new SolidBrush(Color.FromArgb(42, CollectionTheme.Focus))) e.Graphics.FillRoundedRectangle(nestFill, Rectangle.Inflate(card, -5, -5), CollectionTheme.RadiusCard - 4);
+                using (Pen nestEdge = new Pen(CollectionTheme.Focus, 2.5f)) e.Graphics.DrawRoundedRectangle(nestEdge, Rectangle.Inflate(card, -4, -4), CollectionTheme.RadiusCard - 3);
+            }
             if (Focused) using (Pen focus = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawRoundedRectangle(focus, Rectangle.Inflate(card, -2, -2), CollectionTheme.RadiusCard - 2);
             if (pinned)
             {
@@ -882,7 +1232,6 @@ namespace DesktopFoldersDirect
                 using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
                 using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(68, 6, Math.Max(40, Width - 84), 50), format);
             }
-            if (dragging) using (Brush veil = new SolidBrush(Color.FromArgb(118, CollectionTheme.Background))) e.Graphics.FillRoundedRectangle(veil, card, CollectionTheme.RadiusCard);
         }
         static Color Mix(Color background, Color foreground, float amount)
         {
@@ -914,7 +1263,37 @@ namespace DesktopFoldersDirect
             for (int i = 0; i < 10; i++) { double angle = -Math.PI / 2 + i * Math.PI / 5; float radius = (i % 2 == 0) ? outer : inner; points[i] = new PointF(center.X + (float)Math.Cos(angle) * radius, center.Y + (float)Math.Sin(angle) * radius); }
             path.AddPolygon(points); return path;
         }
-        protected override void Dispose(bool disposing) { if (disposing) { if (hoverAnimation != null) hoverAnimation.Dispose(); if (icon != null) icon.Dispose(); } base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) { if (hoverAnimation != null) hoverAnimation.Dispose(); if (immediateContextMenu != null) immediateContextMenu.Dispose(); if (ContextMenuStrip != null) ContextMenuStrip.Dispose(); if (icon != null) icon.Dispose(); } base.Dispose(disposing); }
+    }
+
+    internal sealed class DragTileGhost : Form
+    {
+        readonly Bitmap snapshot;
+        readonly Point grabOffset;
+        readonly System.Windows.Forms.Timer followTimer;
+
+        internal DragTileGhost(AppTile tile, Point offset)
+        {
+            grabOffset = new Point(Math.Max(0, Math.Min(tile.Width - 1, offset.X)), Math.Max(0, Math.Min(tile.Height - 1, offset.Y)));
+            snapshot = new Bitmap(Math.Max(1, tile.Width), Math.Max(1, tile.Height)); tile.DrawToBitmap(snapshot, tile.ClientRectangle);
+            FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; BackColor = Color.Magenta; TransparencyKey = Color.Magenta; ClientSize = snapshot.Size; DoubleBuffered = true; Opacity = .97;
+            followTimer = new System.Windows.Forms.Timer { Interval = 8 }; followTimer.Tick += delegate { FollowPointer(); };
+            Shown += delegate { FollowPointer(); followTimer.Start(); };
+        }
+        protected override bool ShowWithoutActivation { get { return true; } }
+        protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ClassStyle |= Native.CS_DROPSHADOW; p.ExStyle |= Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TRANSPARENT; return p; } }
+        protected override void WndProc(ref Message message) { if (message.Msg == Native.WM_NCHITTEST) { message.Result = (IntPtr)Native.HTTRANSPARENT; return; } base.WndProc(ref message); }
+        internal void FollowPointer()
+        {
+            Point pointer = Cursor.Position; Point requested = new Point(pointer.X - grabOffset.X, pointer.Y - grabOffset.Y);
+            if (Location != requested && IsHandleCreated) Native.SetWindowPos(Handle, IntPtr.Zero, requested.X, requested.Y, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Color.Magenta); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            e.Graphics.DrawImageUnscaled(snapshot, Point.Empty);
+        }
+        protected override void Dispose(bool disposing) { if (disposing) { followTimer.Dispose(); snapshot.Dispose(); } base.Dispose(disposing); }
     }
 
     internal static class CollectionTheme
@@ -1215,8 +1594,9 @@ namespace DesktopFoldersDirect
     internal sealed class TileMotion
     {
         internal AppTile Tile;
-        internal Point From;
         internal Point To;
+        internal PointF Current;
+        internal PointF Velocity;
     }
 
     internal sealed class FolderPanel : Form
@@ -1255,14 +1635,22 @@ namespace DesktopFoldersDirect
         CompositionMotionOverlay activeCompositionCue;
         System.Windows.Forms.Timer releaseTopMost;
         System.Windows.Forms.Timer reorderAnimation;
+        System.Windows.Forms.Timer nestHoverTimer;
         List<TileMotion> reorderMotions;
-        int reorderAnimationStarted;
+        readonly Dictionary<string, PointF> reorderVelocities = new Dictionary<string, PointF>(StringComparer.OrdinalIgnoreCase);
+        DragTileGhost activeDragGhost;
+        int reorderLastFrame;
         bool reorderLayoutSuspended;
         bool gridDragActive;
         bool gridDragCommitted;
         string gridDragSourcePath;
         string gridPreviewTargetPath;
         bool gridPreviewAfter;
+        bool gridHasSwapped;
+        Point gridLastSwapPointer;
+        string nestHoverTargetPath;
+        int nestHoverStarted;
+        bool nestDropArmed;
 
         internal static void ShowOrActivate(string tilePath, Rectangle source, AppSettings currentSettings)
         {
@@ -1279,7 +1667,7 @@ namespace DesktopFoldersDirect
                     existing.ReanchorForActivation(source); existing.Promote(); return;
                 }
                 FolderPanel panel = new FolderPanel(tilePath, source, currentSettings);
-                OpenPanels[requested.Id] = new WeakReference(panel); panel.Show();
+                OpenPanels[requested.Id] = new WeakReference(panel); panel.Show(); panel.Promote();
             }
         }
 
@@ -1310,6 +1698,7 @@ namespace DesktopFoldersDirect
             if (ExplorerDesktop.TryGetIconBounds(tilePath, out live)) source = live;
             groupId = group.Id; anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5); Text = "Desktop Folders — " + group.Name;
             FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Border; Padding = new Padding(1); Opacity = 1.0; AllowDrop = true; KeyPreview = true;
+            nestHoverTimer = new System.Windows.Forms.Timer { Interval = settings.FolderHoverDelay }; nestHoverTimer.Tick += delegate { ArmNestHover(); };
 #if TRACE_DRAG
             ShowInTaskbar = true;
 #endif
@@ -1378,9 +1767,8 @@ namespace DesktopFoldersDirect
                 lock (OpenPanelsLock) { WeakReference reference; if (OpenPanels.TryGetValue(groupId, out reference) && Object.ReferenceEquals(reference.Target, this)) OpenPanels.Remove(groupId); }
                 DataStore.LogDrag("PANEL closed=" + groupId);
             };
-            Shown += delegate {
-                DataStore.LogDrag("PANEL shown=" + group.Name); UpdateModeButtons(); layoutContent(); RenderApps(); Opacity = 1.0; Promote();
-            };
+            PerformLayout(); shell.PerformLayout(); content.PerformLayout(); layoutContent(); UpdateModeButtons(); RenderApps();
+            Shown += delegate { DataStore.LogDrag("PANEL shown=" + group.Name); Opacity = 1.0; };
             Deactivate += delegate { TopMost = false; DataStore.LogDrag("PANEL deactivate=" + groupId); };
             KeyDown += delegate(object sender, KeyEventArgs e) {
                 if (e.KeyCode == Keys.F2) { BeginTitleEdit(); e.Handled = true; }
@@ -1396,7 +1784,7 @@ namespace DesktopFoldersDirect
         void UpdateModeButtons() { gridButton.Selected = gridMode; listButton.Selected = !gridMode; }
         void Promote()
         {
-            if (IsDisposed) return; CancelActiveMorph(); Opacity = 1.0; if (!Visible) Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; TopMost = true; BringToFront(); Activate();
+            if (IsDisposed) return; CancelActiveMorph(); Opacity = 1.0; if (!Visible) Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; TopMost = true; BringToFront(); Native.SetForegroundWindow(Handle); Activate();
             if (releaseTopMost == null)
             {
                 releaseTopMost = new System.Windows.Forms.Timer { Interval = 260 };
@@ -1527,7 +1915,9 @@ namespace DesktopFoldersDirect
         void RenderApps()
         {
             if (apps == null || group == null) return;
-            CancelReorderAnimation(); themedScroll.SetValue(0); apps.SuspendLayout(); apps.Controls.Clear(); apps.Top = 0; apps.Height = 10000; string query = search == null ? "" : search.Text.Trim().ToLowerInvariant();
+            CancelReorderAnimation(); themedScroll.SetValue(0); apps.SuspendLayout();
+            foreach (Control obsolete in apps.Controls.Cast<Control>().ToArray()) { apps.Controls.Remove(obsolete); obsolete.Dispose(); }
+            apps.Top = 0; apps.Height = 10000; string query = search == null ? "" : search.Text.Trim().ToLowerInvariant();
             VirtualMember[] members = group.Members.Where(m => File.Exists(m.Path) && Path.GetFileNameWithoutExtension(m.Path).ToLowerInvariant().Contains(query)).OrderByDescending(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)).ToArray();
             bool compactGrid = gridMode && apps.ClientSize.Width < 600;
             int usableWidth = Math.Max(260, apps.ClientSize.Width);
@@ -1538,7 +1928,7 @@ namespace DesktopFoldersDirect
             bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
             foreach (VirtualMember member in members)
             {
-                string path = member.Path; bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase);
+                string path = member.Path; bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); VirtualGroup nestedGroup = VirtualLayoutGraph.ResolveMemberGroup(layout, member);
                 if (!activePinnedSection.HasValue || activePinnedSection.Value != pinned)
                 {
                     if (apps.Controls.Count > 0) apps.SetFlowBreak(apps.Controls[apps.Controls.Count - 1], true);
@@ -1550,26 +1940,42 @@ namespace DesktopFoldersDirect
                 tile.MouseWheel += delegate(object sender, MouseEventArgs e) { themedScroll.ScrollBy(-(e.Delta / 120) * 70); HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; };
                 Point childDragStart = Point.Empty; bool childDidDrag = false;
                 tile.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { childDragStart = e.Location; childDidDrag = false; } };
+                tile.GiveFeedback += delegate(object sender, GiveFeedbackEventArgs e) { if (activeDragGhost != null && !activeDragGhost.IsDisposed) activeDragGhost.FollowPointer(); e.UseDefaultCursors = true; };
+                tile.QueryContinueDrag += delegate { if (activeDragGhost != null && !activeDragGhost.IsDisposed) activeDragGhost.FollowPointer(); };
                 tile.MouseMove += delegate(object sender, MouseEventArgs e) {
                     if (e.Button != MouseButtons.Left || childDidDrag) return;
                     if (Math.Abs(e.X - childDragStart.X) < SystemInformation.DragSize.Width / 2 && Math.Abs(e.Y - childDragStart.Y) < SystemInformation.DragSize.Height / 2) return;
                     childDidDrag = true; DataObject data = new DataObject(); data.SetData(SourceGroupFormat, groupId); data.SetData(MemberPathFormat, path);
-                    BeginGridDrag(path); tile.SetDragVisual(true, false);
-                    DragDropEffects effect = tile.DoDragDrop(data, DragDropEffects.Link | DragDropEffects.Move);
+                    BeginGridDrag(path); activeDragGhost = new DragTileGhost(tile, childDragStart); tile.SetDragVisual(true, false); activeDragGhost.FollowPointer(); activeDragGhost.Show();
+                    DragDropEffects effect;
+                    try { effect = tile.DoDragDrop(data, DragDropEffects.Link | DragDropEffects.Move); }
+                    finally { if (activeDragGhost != null) { activeDragGhost.Close(); activeDragGhost.Dispose(); activeDragGhost = null; } }
                     bool committed = gridDragCommitted; bool droppedOnDesktop = effect != DragDropEffects.Move && ExplorerDesktop.IsPointOnDesktopSurface(Cursor.Position);
                     if (!committed) CancelGridDragPreview(true); else EndGridDrag();
                     AppTile currentTile = apps.Controls.OfType<AppTile>().FirstOrDefault(item => item.ItemPath.Equals(path, StringComparison.OrdinalIgnoreCase));
                     if (currentTile != null && !currentTile.IsDisposed) currentTile.SetDragVisual(false, false);
                     if (droppedOnDesktop) BeginInvoke(new Action(delegate { AppTile visibleTile = apps.Controls.OfType<AppTile>().FirstOrDefault(item => item.ItemPath.Equals(path, StringComparison.OrdinalIgnoreCase)); AnimateMoveOut(visibleTile, path); }));
                 };
-                tile.Click += delegate { if (childDidDrag) { childDidDrag = false; return; } try { Process.Start(path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); } };
+                Action activateItem = delegate {
+                    if (childDidDrag) { childDidDrag = false; return; }
+                    if (nestedGroup != null) { FolderPanel.ShowOrActivate(nestedGroup.TilePath, tile.RectangleToScreen(tile.ClientRectangle), settings); return; }
+                    try { Process.Start(path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); }
+                };
+                tile.ItemActivated += delegate { activateItem(); };
                 tile.DragEnter += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
                 tile.DragOver += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
                 tile.DragLeave += delegate { tile.SetDragVisual(false, false); };
                 tile.DragDrop += delegate(object sender, DragEventArgs e) { HandleTileDrop(tile, path, pinned, e); };
-                ContextMenuStrip shellTrigger = new ContextMenuStrip();
-                shellTrigger.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = true; BeginInvoke(new Action(delegate { if (IsDisposed) return; DataStore.LogDrag("SHELL_MENU request=" + path); ShellContextMenu.Show(this, path, pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }); })); };
-                tile.ContextMenuStrip = shellTrigger;
+                ContextMenuStrip quickMenu = new ContextMenuStrip { ShowImageMargin = false, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 9.5f) };
+                quickMenu.Items.Add(nestedGroup == null ? "Mở" : "Mở collection", null, delegate { activateItem(); });
+                quickMenu.Items.Add(pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", null, delegate { TogglePin(path); });
+                quickMenu.Items.Add("Đưa ra Desktop", null, delegate { AnimateMoveOut(tile, path); });
+                quickMenu.Items.Add(new ToolStripSeparator());
+                quickMenu.Items.Add("Di chuyển về trước", null, delegate { MoveMemberBy(path, -1); });
+                quickMenu.Items.Add("Di chuyển về sau", null, delegate { MoveMemberBy(path, 1); });
+                quickMenu.Items.Add(new ToolStripSeparator());
+                quickMenu.Items.Add("Tùy chọn Windows…", null, delegate { BeginInvoke(new Action(delegate { if (!IsDisposed) ShellContextMenu.Show(this, path, pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }, delegate { MoveMemberBy(path, -1); }, delegate { MoveMemberBy(path, 1); }); })); });
+                tile.SetImmediateContextMenu(quickMenu);
                 apps.Controls.Add(tile);
             }
             apps.ResumeLayout(); apps.PerformLayout(); int contentBottom = 0;
@@ -1581,6 +1987,19 @@ namespace DesktopFoldersDirect
         void HandleTileDragEnter(AppTile targetTile, string targetPath, bool targetPinned, DragEventArgs e)
         {
             string sourceGroup = e.Data.GetData(SourceGroupFormat) as string; string sourcePath = e.Data.GetData(MemberPathFormat) as string;
+            string[] externalPaths = String.IsNullOrEmpty(sourcePath) && e.Data.GetDataPresent(DataFormats.FileDrop) ? e.Data.GetData(DataFormats.FileDrop) as string[] : null;
+            string draggedPath = !String.IsNullOrEmpty(sourcePath) ? sourcePath : (externalPaths != null && externalPaths.Length > 0 ? externalPaths[0] : null);
+            VirtualGroup targetGroup = VirtualLayoutGraph.ResolveTileGroup(layout, targetPath);
+            bool canCreateNested = sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath) && !sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase);
+            bool canDropIntoNested = targetGroup != null && !String.IsNullOrEmpty(draggedPath) && !draggedPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase);
+            if ((canCreateNested || canDropIntoNested) && IsNestDropZone(targetTile, e))
+            {
+                if (!String.Equals(nestHoverTargetPath, targetPath, StringComparison.OrdinalIgnoreCase)) { ResetNestHover(); nestHoverTargetPath = targetPath; nestHoverStarted = Environment.TickCount; nestHoverTimer.Start(); }
+                nestDropArmed = nestDropArmed || unchecked(Environment.TickCount - nestHoverStarted) >= settings.FolderHoverDelay;
+                e.Effect = !String.IsNullOrEmpty(sourceGroup) ? DragDropEffects.Move : DragDropEffects.Link;
+                targetTile.SetDragVisual(false, true, nestDropArmed); if (activeDragGhost != null && !activeDragGhost.IsDisposed) activeDragGhost.FollowPointer(); return;
+            }
+            ResetNestHover();
             if (sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath))
             {
                 bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase);
@@ -1597,6 +2016,21 @@ namespace DesktopFoldersDirect
         void HandleTileDrop(AppTile targetTile, string targetPath, bool targetPinned, DragEventArgs e)
         {
             targetTile.SetDragVisual(false, false); string sourceGroup = e.Data.GetData(SourceGroupFormat) as string; string sourcePath = e.Data.GetData(MemberPathFormat) as string;
+            string[] externalPaths = String.IsNullOrEmpty(sourcePath) && e.Data.GetDataPresent(DataFormats.FileDrop) ? e.Data.GetData(DataFormats.FileDrop) as string[] : null;
+            VirtualGroup targetGroup = VirtualLayoutGraph.ResolveTileGroup(layout, targetPath);
+            if (nestDropArmed && String.Equals(nestHoverTargetPath, targetPath, StringComparison.OrdinalIgnoreCase))
+            {
+                bool nested = false;
+                if (targetGroup != null)
+                {
+                    if (!String.IsNullOrEmpty(sourceGroup) && !String.IsNullOrEmpty(sourcePath)) nested = TransferMember(sourceGroup, sourcePath, targetGroup.Id);
+                    else if (externalPaths != null && externalPaths.Length > 0) { AddMember(externalPaths[0], targetGroup.Id); NotifyLayoutChanged(); nested = true; }
+                }
+                else if (sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath)) nested = CreateNestedGroup(sourcePath, targetPath);
+                ResetNestHover();
+                if (nested) { gridDragCommitted = true; gridDragActive = false; e.Effect = String.IsNullOrEmpty(sourceGroup) ? DragDropEffects.Link : DragDropEffects.Move; return; }
+            }
+            ResetNestHover();
             if (sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath))
             {
                 bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase);
@@ -1612,27 +2046,46 @@ namespace DesktopFoldersDirect
         }
         void BeginGridDrag(string sourcePath)
         {
-            CancelReorderAnimation(); gridDragActive = true; gridDragCommitted = false; gridDragSourcePath = sourcePath; gridPreviewTargetPath = null; gridPreviewAfter = false;
+            CancelReorderAnimation(); ResetNestHover(); gridDragActive = true; gridDragCommitted = false; gridDragSourcePath = sourcePath; gridPreviewTargetPath = null; gridPreviewAfter = false; gridHasSwapped = false; gridLastSwapPointer = Cursor.Position;
         }
+        static bool IsNestDropZone(AppTile targetTile, DragEventArgs e)
+        {
+            Point local = targetTile.PointToClient(new Point(e.X, e.Y)); Rectangle center = Rectangle.Inflate(targetTile.ClientRectangle, -Math.Max(12, targetTile.Width / 5), -Math.Max(10, targetTile.Height / 5));
+            return center.Width > 0 && center.Height > 0 && center.Contains(local);
+        }
+        void ArmNestHover()
+        {
+            nestHoverTimer.Stop(); if (String.IsNullOrEmpty(nestHoverTargetPath)) return;
+            AppTile target = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(nestHoverTargetPath, StringComparison.OrdinalIgnoreCase)); if (target == null || target.IsDisposed) { ResetNestHover(); return; }
+            Rectangle center = Rectangle.Inflate(target.RectangleToScreen(target.ClientRectangle), -Math.Max(12, target.Width / 5), -Math.Max(10, target.Height / 5));
+            if (!center.Contains(Cursor.Position)) { ResetNestHover(); return; }
+            nestDropArmed = true; target.SetDragVisual(false, true, true);
+        }
+        void ResetNestHover() { if (nestHoverTimer != null) nestHoverTimer.Stop(); nestHoverTargetPath = null; nestHoverStarted = 0; nestDropArmed = false; }
         void PreviewGridReorder(string sourcePath, string targetPath, bool insertAfter)
         {
             if (!gridDragActive || String.IsNullOrEmpty(sourcePath) || sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)) return;
             if (String.Equals(gridPreviewTargetPath, targetPath, StringComparison.OrdinalIgnoreCase) && gridPreviewAfter == insertAfter) return;
-            CancelReorderAnimation(); AppTile source = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(sourcePath, StringComparison.OrdinalIgnoreCase)); AppTile target = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
+            Point pointer = Cursor.Position; int hysteresis = gridMode ? 14 : 10;
+            if (gridHasSwapped && Math.Abs(pointer.X - gridLastSwapPointer.X) + Math.Abs(pointer.Y - gridLastSwapPointer.Y) < hysteresis) return;
+            AppTile source = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(sourcePath, StringComparison.OrdinalIgnoreCase)); AppTile target = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
             if (source == null || target == null) return;
             bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase), targetPinned = group.Pinned.Contains(targetPath, StringComparer.OrdinalIgnoreCase); if (sourcePinned != targetPinned) return;
             List<AppTile> sectionTiles = apps.Controls.OfType<AppTile>().Where(tile => group.Pinned.Contains(tile.ItemPath, StringComparer.OrdinalIgnoreCase) == sourcePinned).ToList();
             Dictionary<string, Point> previous = sectionTiles.ToDictionary(tile => tile.ItemPath, tile => tile.Location, StringComparer.OrdinalIgnoreCase);
+            // Continue from the frame currently visible instead of snapping the
+            // preceding motion to its endpoint before targeting the next slot.
+            StopReorderAnimation(false);
             sectionTiles.Remove(source); int targetIndex = sectionTiles.FindIndex(tile => tile.ItemPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)); if (targetIndex < 0) return; if (insertAfter) targetIndex++; sectionTiles.Insert(Math.Max(0, Math.Min(sectionTiles.Count, targetIndex)), source);
             int firstControlIndex = sectionTiles.Min(tile => apps.Controls.GetChildIndex(tile)); apps.SuspendLayout();
             for (int index = 0; index < sectionTiles.Count; index++) apps.Controls.SetChildIndex(sectionTiles[index], firstControlIndex + index);
-            apps.ResumeLayout(true); apps.PerformLayout(); gridPreviewTargetPath = targetPath; gridPreviewAfter = insertAfter; StartReorderAnimation(previous);
+            apps.ResumeLayout(true); apps.PerformLayout(); gridPreviewTargetPath = targetPath; gridPreviewAfter = insertAfter; gridHasSwapped = true; gridLastSwapPointer = pointer; StartReorderAnimation(previous);
         }
         void CommitGridReorder()
         {
-            if (!gridDragActive) return; CancelReorderAnimation(); layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) { EndGridDrag(); return; }
+            if (!gridDragActive) return; StopReorderAnimation(true); layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) { EndGridDrag(); return; }
             List<string> visual = apps.Controls.OfType<AppTile>().Select(tile => tile.ItemPath).ToList(); ApplyVisualSubset(group.Members, visual.Where(path => group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList()); ApplyVisualSubset(group.Members, visual.Where(path => !group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList());
-            DataStore.SaveVirtualLayout(layout); try { GroupTileFactory.CreateOrUpdate(group); } catch { } gridDragCommitted = true; gridDragActive = false; gridPreviewTargetPath = null;
+            DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); gridDragCommitted = true; gridDragActive = false; gridPreviewTargetPath = null;
         }
         static void ApplyVisualSubset(List<VirtualMember> members, List<string> visualOrder)
         {
@@ -1646,36 +2099,60 @@ namespace DesktopFoldersDirect
         }
         void EndGridDrag()
         {
-            gridDragActive = false; gridDragCommitted = false; gridDragSourcePath = null; gridPreviewTargetPath = null; gridPreviewAfter = false;
+            ResetNestHover(); gridDragActive = false; gridDragCommitted = false; gridDragSourcePath = null; gridPreviewTargetPath = null; gridPreviewAfter = false; gridHasSwapped = false;
         }
         void StartReorderAnimation(Dictionary<string, Point> previous)
         {
-            if (settings.ReduceMotion || previous == null || previous.Count == 0) return;
+            if (settings.ReduceMotion || previous == null || previous.Count == 0) { reorderVelocities.Clear(); return; }
             List<TileMotion> motions = new List<TileMotion>();
             foreach (AppTile tile in apps.Controls.OfType<AppTile>())
             {
                 Point from; if (!previous.TryGetValue(tile.ItemPath, out from) || from == tile.Location) continue;
-                motions.Add(new TileMotion { Tile = tile, From = from, To = tile.Location });
+                PointF velocity; if (!reorderVelocities.TryGetValue(tile.ItemPath, out velocity)) velocity = PointF.Empty;
+                motions.Add(new TileMotion { Tile = tile, Current = new PointF(from.X, from.Y), Velocity = velocity, To = tile.Location });
             }
             if (motions.Count == 0) return;
             apps.SuspendLayout(); reorderLayoutSuspended = true; reorderMotions = motions;
-            foreach (TileMotion motion in motions) motion.Tile.Location = motion.From;
-            if (reorderAnimation == null) { reorderAnimation = new System.Windows.Forms.Timer { Interval = 15 }; reorderAnimation.Tick += delegate { AnimateReorderFrame(); }; }
-            reorderAnimationStarted = Environment.TickCount; reorderAnimation.Start();
+            foreach (TileMotion motion in motions) motion.Tile.Location = Point.Round(motion.Current);
+            if (reorderAnimation == null) { reorderAnimation = new System.Windows.Forms.Timer { Interval = 8 }; reorderAnimation.Tick += delegate { AnimateReorderFrame(); }; }
+            reorderLastFrame = Environment.TickCount; reorderAnimation.Start();
         }
         void AnimateReorderFrame()
         {
             if (reorderMotions == null || reorderMotions.Count == 0) { CancelReorderAnimation(); return; }
-            double progress = Math.Min(1.0, unchecked(Environment.TickCount - reorderAnimationStarted) / 155.0); double eased = 1.0 - Math.Pow(1.0 - progress, 3.0);
-            foreach (TileMotion motion in reorderMotions) if (!motion.Tile.IsDisposed) motion.Tile.Location = new Point(motion.From.X + (int)Math.Round((motion.To.X - motion.From.X) * eased), motion.From.Y + (int)Math.Round((motion.To.Y - motion.From.Y) * eased));
-            if (progress >= 1.0) CancelReorderAnimation();
+            int now = Environment.TickCount; float seconds = Math.Max(1, Math.Min(40, unchecked(now - reorderLastFrame))) / 1000f; reorderLastFrame = now;
+            // Exact critically-damped spring step. It stays stable after a slow UI
+            // frame and preserves velocity when the pointer reverses direction.
+            const float omega = 28f; float decay = (float)Math.Exp(-omega * seconds); bool settled = true;
+            foreach (TileMotion motion in reorderMotions)
+            {
+                if (motion.Tile.IsDisposed) continue;
+                float errorX = motion.Current.X - motion.To.X, errorY = motion.Current.Y - motion.To.Y;
+                float coupledX = motion.Velocity.X + omega * errorX, coupledY = motion.Velocity.Y + omega * errorY;
+                float nextErrorX = (errorX + coupledX * seconds) * decay, nextErrorY = (errorY + coupledY * seconds) * decay;
+                float vx = (motion.Velocity.X - omega * coupledX * seconds) * decay, vy = (motion.Velocity.Y - omega * coupledY * seconds) * decay;
+                motion.Current = new PointF(motion.To.X + nextErrorX, motion.To.Y + nextErrorY); motion.Velocity = new PointF(vx, vy);
+                if (Math.Abs(nextErrorX) < .7f && Math.Abs(nextErrorY) < .7f && Math.Abs(vx) < 7f && Math.Abs(vy) < 7f) { motion.Current = new PointF(motion.To.X, motion.To.Y); motion.Velocity = PointF.Empty; }
+                else settled = false;
+                motion.Tile.Location = Point.Round(motion.Current); reorderVelocities[motion.Tile.ItemPath] = motion.Velocity;
+            }
+            if (settled) CancelReorderAnimation();
         }
         void CancelReorderAnimation()
         {
+            StopReorderAnimation(true);
+        }
+        void StopReorderAnimation(bool settle)
+        {
             if (reorderAnimation != null) reorderAnimation.Stop();
-            if (reorderMotions != null) foreach (TileMotion motion in reorderMotions) if (!motion.Tile.IsDisposed) motion.Tile.Location = motion.To;
+            if (reorderMotions != null) foreach (TileMotion motion in reorderMotions)
+            {
+                if (settle) { if (!motion.Tile.IsDisposed) motion.Tile.Location = motion.To; reorderVelocities.Remove(motion.Tile.ItemPath); }
+                else reorderVelocities[motion.Tile.ItemPath] = motion.Velocity;
+            }
+            if (settle) reorderVelocities.Clear();
             reorderMotions = null;
-            if (reorderLayoutSuspended && apps != null && !apps.IsDisposed) { reorderLayoutSuspended = false; apps.ResumeLayout(false); apps.PerformLayout(); }
+            if (reorderLayoutSuspended && apps != null && !apps.IsDisposed) { reorderLayoutSuspended = false; apps.ResumeLayout(false); if (settle) apps.PerformLayout(); }
         }
         void AnimateMoveOut(AppTile tile, string path)
         {
@@ -1709,22 +2186,70 @@ namespace DesktopFoldersDirect
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
             string existing = group.Pinned.FirstOrDefault(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); if (existing == null) group.Pinned.Add(path); else group.Pinned.Remove(existing);
-            DataStore.SaveVirtualLayout(layout); try { GroupTileFactory.CreateOrUpdate(group); } catch { } NotifyLayoutChanged();
+            DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); NotifyLayoutChanged();
+        }
+        void MoveMemberBy(string path, int delta)
+        {
+            layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null || delta == 0) return;
+            bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); List<string> section = group.Members.Where(member => group.Pinned.Contains(member.Path, StringComparer.OrdinalIgnoreCase) == pinned).Select(member => member.Path).ToList();
+            int current = section.FindIndex(item => item.Equals(path, StringComparison.OrdinalIgnoreCase)); int requested = Math.Max(0, Math.Min(section.Count - 1, current + Math.Sign(delta))); if (current < 0 || current == requested) return;
+            string moving = section[current]; section.RemoveAt(current); section.Insert(requested, moving); ApplyVisualSubset(group.Members, section); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); NotifyLayoutChanged();
         }
         void MoveOut(string path)
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
             VirtualMember member = group.Members.FirstOrDefault(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
-            List<string> oldPinned = new List<string>(group.Pinned);
-            try { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(member.Path); }
+            List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group);
+            try { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); ExplorerDesktop.NotifyPathChanged(member.Path); }
             catch (Exception e) { try { File.SetAttributes(member.Path, File.GetAttributes(member.Path) | FileAttributes.Hidden); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, "Desktop Folders"); return; }
-            if (settings.DissolveSingleAppGroup && group.Members.Count <= 1) DissolveGroup(); else { try { GroupTileFactory.CreateOrUpdate(group); } catch { } NotifyLayoutChanged(); }
+            if (settings.DissolveSingleAppGroup && group.Members.Count <= 1)
+            {
+                List<string> affected = DissolveGroupRecord(layout, group); DataStore.SaveVirtualLayout(layout);
+                foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(layout, affectedId);
+                ExplorerDesktop.QueuePlacement(member.Path, preferredPlacement); NotifyLayoutChanged(); Close();
+            }
+            else { DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); ExplorerDesktop.QueuePlacement(member.Path, preferredPlacement); NotifyLayoutChanged(); }
         }
         void DissolveGroup()
         {
-            foreach (VirtualMember member in group.Members) try { if (File.Exists(member.Path)) { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(member.Path); } } catch { }
-            try { if (File.Exists(group.TilePath)) File.Delete(group.TilePath); } catch { } try { if (!String.IsNullOrEmpty(group.IconPath) && File.Exists(group.IconPath)) File.Delete(group.IconPath); } catch { }
-            layout.Groups.Remove(group); DataStore.SaveVirtualLayout(layout); NotifyLayoutChanged(); Close();
+            layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
+            List<string> affected = DissolveGroupRecord(layout, group); DataStore.SaveVirtualLayout(layout);
+            foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(layout, affectedId);
+            NotifyLayoutChanged(); Close();
+        }
+        static List<string> DissolveGroupRecord(VirtualLayout current, VirtualGroup dissolving)
+        {
+            List<string> affected = new List<string>(); List<VirtualMember> desktopRestores = new List<VirtualMember>(); List<VirtualGroup> parents = VirtualLayoutGraph.ParentsOf(current, dissolving.Id); Point preferredPlacement = PreferredDesktopPoint(dissolving);
+            if (parents.Count == 0)
+            {
+                foreach (VirtualMember remaining in dissolving.Members) try { if (File.Exists(remaining.Path)) { File.SetAttributes(remaining.Path, (FileAttributes)remaining.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(remaining.Path); desktopRestores.Add(remaining); } } catch { }
+            }
+            else
+            {
+                foreach (VirtualGroup parent in parents)
+                {
+                    List<VirtualMember> links = parent.Members.Where(member => String.Equals(member.GroupId, dissolving.Id, StringComparison.OrdinalIgnoreCase) || (!String.IsNullOrEmpty(member.Path) && member.Path.Equals(dissolving.TilePath, StringComparison.OrdinalIgnoreCase))).ToList();
+                    int insertion = links.Count == 0 ? parent.Members.Count : parent.Members.IndexOf(links[0]); bool wasPinned = links.Any(link => parent.Pinned.Contains(link.Path, StringComparer.OrdinalIgnoreCase));
+                    foreach (VirtualMember link in links) { parent.Members.Remove(link); parent.Pinned.RemoveAll(path => path.Equals(link.Path, StringComparison.OrdinalIgnoreCase)); }
+                    foreach (VirtualMember remaining in dissolving.Members)
+                    {
+                        bool duplicate = parent.Members.Any(member => (!String.IsNullOrEmpty(remaining.GroupId) && String.Equals(member.GroupId, remaining.GroupId, StringComparison.OrdinalIgnoreCase)) || member.Path.Equals(remaining.Path, StringComparison.OrdinalIgnoreCase));
+                        if (!duplicate) { parent.Members.Insert(Math.Min(insertion++, parent.Members.Count), remaining); if (wasPinned && !parent.Pinned.Contains(remaining.Path, StringComparer.OrdinalIgnoreCase)) parent.Pinned.Add(remaining.Path); }
+                    }
+                    affected.Add(parent.Id);
+                }
+            }
+            try { if (File.Exists(dissolving.TilePath)) File.Delete(dissolving.TilePath); } catch { }
+            ExplorerDesktop.NotifyPathDeleted(dissolving.TilePath);
+            try { if (!String.IsNullOrEmpty(dissolving.IconPath) && File.Exists(dissolving.IconPath)) File.Delete(dissolving.IconPath); } catch { }
+            foreach (VirtualMember restored in desktopRestores) ExplorerDesktop.QueuePlacement(restored.Path, preferredPlacement);
+            current.Groups.Remove(dissolving); return affected;
+        }
+        static Point PreferredDesktopPoint(VirtualGroup sourceGroup)
+        {
+            Point pointer = Cursor.Position; if (ExplorerDesktop.IsPointOnDesktopSurface(pointer)) return pointer;
+            Rectangle tileBounds; if (sourceGroup != null && ExplorerDesktop.TryGetIconBounds(sourceGroup.TilePath, out tileBounds)) return new Point(tileBounds.Left + tileBounds.Width / 2, tileBounds.Top + tileBounds.Height / 2);
+            Rectangle work = Screen.PrimaryScreen.WorkingArea; return new Point(work.Left + 48, work.Top + 48);
         }
         void RenameGroup(string value)
         {
@@ -1733,7 +2258,7 @@ namespace DesktopFoldersDirect
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
             string newPath = Path.Combine(ExplorerDesktop.Desktop, requested + ".lnk"); if (File.Exists(newPath)) { titleLabel.Text = group.Name; titleEditor.Text = group.Name; return; }
             string oldPath = group.TilePath, oldName = group.Name;
-            try { File.Move(oldPath, newPath); group.TilePath = newPath; group.Name = requested; GroupTileFactory.CreateOrUpdate(group); DataStore.SaveVirtualLayout(layout); titleLabel.Text = requested; NotifyLayoutChanged(); }
+            try { File.Move(oldPath, newPath); ExplorerDesktop.NotifyPathDeleted(oldPath); group.TilePath = newPath; group.Name = requested; VirtualLayoutGraph.ReplaceTilePath(layout, group.Id, oldPath, newPath); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); titleLabel.Text = requested; NotifyLayoutChanged(); }
             catch { try { if (File.Exists(newPath) && !File.Exists(oldPath)) File.Move(newPath, oldPath); } catch { } group.TilePath = oldPath; group.Name = oldName; titleLabel.Text = oldName; titleEditor.Text = oldName; }
         }
         void OnDragEnter(object sender, DragEventArgs e)
@@ -1755,30 +2280,65 @@ namespace DesktopFoldersDirect
             }
             catch (Exception error) { e.Effect = DragDropEffects.None; MessageBox.Show("Không thể thêm vào collection: " + error.Message, "Desktop Folders"); }
         }
-        bool TransferMember(string sourceGroupId, string path)
+        bool TransferMember(string sourceGroupId, string path, string destinationGroupId = null)
         {
-            VirtualLayout latest = DataStore.LoadVirtualLayout(); VirtualGroup from = latest.Groups.FirstOrDefault(g => g.Id == sourceGroupId); VirtualGroup to = latest.Groups.FirstOrDefault(g => g.Id == groupId);
+            VirtualLayout latest = DataStore.LoadVirtualLayout(); VirtualGroup from = latest.Groups.FirstOrDefault(g => g.Id == sourceGroupId); VirtualGroup to = latest.Groups.FirstOrDefault(g => g.Id == (destinationGroupId ?? groupId));
             if (from == null || to == null || to.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) return false;
             VirtualMember member = from.Members.FirstOrDefault(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); if (member == null) return false;
+            VirtualGroup nested = VirtualLayoutGraph.ResolveMemberGroup(latest, member);
+            if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.", "Desktop Folders"); return false; }
             from.Members.Remove(member); from.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); to.Members.Add(member);
             bool dissolveSource = settings.DissolveSingleAppGroup && from.Members.Count <= 1;
-            if (dissolveSource) latest.Groups.Remove(from);
-            DataStore.SaveVirtualLayout(latest); try { GroupTileFactory.CreateOrUpdate(to); } catch { }
+            List<string> affected = dissolveSource ? DissolveGroupRecord(latest, from) : new List<string>();
+            DataStore.SaveVirtualLayout(latest); VirtualLayoutGraph.RefreshGroupAndAncestors(latest, to.Id);
             if (dissolveSource)
             {
-                foreach (VirtualMember remaining in from.Members) try { if (File.Exists(remaining.Path)) { File.SetAttributes(remaining.Path, (FileAttributes)remaining.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(remaining.Path); } } catch { }
-                try { if (File.Exists(from.TilePath)) File.Delete(from.TilePath); } catch { } try { if (!String.IsNullOrEmpty(from.IconPath) && File.Exists(from.IconPath)) File.Delete(from.IconPath); } catch { }
+                foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(latest, affectedId);
             }
-            else try { GroupTileFactory.CreateOrUpdate(from); } catch { }
+            else VirtualLayoutGraph.RefreshGroupAndAncestors(latest, from.Id);
             NotifyLayoutChanged(); return true;
         }
-        void AddMember(string path)
+        void AddMember(string path, string destinationGroupId = null)
         {
-            if (!File.Exists(path)) return; layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null || group.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
-            FileAttributes attributes = File.GetAttributes(path); VirtualMember added = new VirtualMember { Path = path, OriginalAttributes = (int)attributes };
-            try { File.SetAttributes(path, attributes | FileAttributes.Hidden); group.Members.Add(added); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(path); }
-            catch { group.Members.Remove(added); try { File.SetAttributes(path, attributes); } catch { } throw; }
-            try { GroupTileFactory.CreateOrUpdate(group); } catch { }
+            if (!File.Exists(path)) return; layout = DataStore.LoadVirtualLayout(); VirtualGroup destination = layout.Groups.FirstOrDefault(g => g.Id == (destinationGroupId ?? groupId)); if (destination == null || destination.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
+            VirtualGroup nested = VirtualLayoutGraph.ResolveTileGroup(layout, path);
+            if (nested != null)
+            {
+                if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, destination.Id)) throw new InvalidOperationException("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.");
+                VirtualGroup existingParent = VirtualLayoutGraph.ParentsOf(layout, nested.Id).FirstOrDefault();
+                if (existingParent != null) throw new InvalidOperationException("Collection này đã nằm trong \"" + existingParent.Name + "\". Hãy kéo nó trực tiếp từ collection đó để di chuyển.");
+            }
+            FileAttributes attributes = File.GetAttributes(path); VirtualMember added = new VirtualMember { Path = path, OriginalAttributes = (int)attributes, GroupId = nested == null ? null : nested.Id };
+            try { File.SetAttributes(path, attributes | FileAttributes.Hidden); destination.Members.Add(added); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(path); }
+            catch { destination.Members.Remove(added); try { File.SetAttributes(path, attributes); } catch { } throw; }
+            VirtualLayoutGraph.RefreshGroupAndAncestors(layout, destination.Id);
+        }
+        bool CreateNestedGroup(string sourcePath, string targetPath)
+        {
+            VirtualLayout latest = DataStore.LoadVirtualLayout(); VirtualGroup parent = latest.Groups.FirstOrDefault(g => g.Id == groupId); if (parent == null) return false;
+            VirtualMember sourceMember = parent.Members.FirstOrDefault(member => member.Path.Equals(sourcePath, StringComparison.OrdinalIgnoreCase));
+            VirtualMember targetMember = parent.Members.FirstOrDefault(member => member.Path.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
+            if (sourceMember == null || targetMember == null || Object.ReferenceEquals(sourceMember, targetMember)) return false;
+            int insertion = Math.Min(parent.Members.IndexOf(sourceMember), parent.Members.IndexOf(targetMember)); bool pinNested = parent.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase) || parent.Pinned.Contains(targetPath, StringComparer.OrdinalIgnoreCase);
+            string name = ExplorerDesktop.NewGroupName(), nestedId = Guid.NewGuid().ToString("N"), tilePath = Path.Combine(ExplorerDesktop.Desktop, name + ".lnk");
+            VirtualGroup nested = new VirtualGroup { Id = nestedId, Name = name, TilePath = tilePath }; nested.Members.Add(targetMember); nested.Members.Add(sourceMember);
+            try
+            {
+                GroupTileFactory.CreateOrUpdate(nested); FileAttributes tileAttributes = File.GetAttributes(tilePath); File.SetAttributes(tilePath, tileAttributes | FileAttributes.Hidden);
+                parent.Members.Remove(sourceMember); parent.Members.Remove(targetMember); parent.Pinned.RemoveAll(path => path.Equals(sourcePath, StringComparison.OrdinalIgnoreCase) || path.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
+                VirtualMember nestedMember = new VirtualMember { Path = tilePath, OriginalAttributes = (int)tileAttributes, GroupId = nestedId }; parent.Members.Insert(Math.Min(insertion, parent.Members.Count), nestedMember); if (pinNested) parent.Pinned.Add(tilePath);
+                latest.Groups.Add(nested); DataStore.SaveVirtualLayout(latest); VirtualLayoutGraph.RefreshGroupAndAncestors(latest, nested.Id); ExplorerDesktop.NotifyPathChanged(tilePath); NotifyLayoutChanged(); return true;
+            }
+            catch (Exception error)
+            {
+                try { if (File.Exists(tilePath)) File.Delete(tilePath); } catch { } try { if (!String.IsNullOrEmpty(nested.IconPath) && File.Exists(nested.IconPath)) File.Delete(nested.IconPath); } catch { }
+                MessageBox.Show("Không thể tạo collection lồng: " + error.Message, "Desktop Folders"); return false;
+            }
+        }
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == Native.WM_MOUSEACTIVATE) { Native.SetForegroundWindow(Handle); message.Result = (IntPtr)Native.MA_ACTIVATE; return; }
+            base.WndProc(ref message);
         }
         protected override void OnResize(EventArgs e)
         {
@@ -1786,7 +2346,7 @@ namespace DesktopFoldersDirect
             Rectangle rounded = new Rectangle(0, 0, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 1));
             using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rounded, CollectionTheme.RadiusWindow)) { Region old = Region; Region = new Region(path); if (old != null) old.Dispose(); }
         }
-        protected override void Dispose(bool disposing) { if (disposing) { if (releaseTopMost != null) releaseTopMost.Dispose(); if (reorderAnimation != null) reorderAnimation.Dispose(); if (tooltips != null) tooltips.Dispose(); } base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) { if (activeDragGhost != null) activeDragGhost.Dispose(); if (releaseTopMost != null) releaseTopMost.Dispose(); if (reorderAnimation != null) reorderAnimation.Dispose(); if (nestHoverTimer != null) nestHoverTimer.Dispose(); if (tooltips != null) tooltips.Dispose(); } base.Dispose(disposing); }
     }
 
     internal sealed class GradientPanel : Panel
@@ -2540,6 +3100,7 @@ namespace DesktopFoldersDirect
                     string candidate = Path.Combine(ExplorerDesktop.Desktop, group.Name + ".lnk"); int suffix = 2;
                     while (File.Exists(candidate)) candidate = Path.Combine(ExplorerDesktop.Desktop, group.Name + " (" + suffix++ + ").lnk");
                     group.TilePath = candidate;
+                    VirtualLayoutGraph.ReplaceTilePath(layout, group.Id, oldTile, candidate);
                 }
                 try
                 {
@@ -2585,7 +3146,10 @@ namespace DesktopFoldersDirect
             if (action == Native.WM_LBUTTONDOWN)
             {
                 source = null;
-                if (ExplorerDesktop.IsDesktopForeground())
+                // A newly shown collection may still race Explorer for foreground
+                // activation. Only start a Desktop gesture when the pointer is truly
+                // over the Desktop ListView, never through our popup window.
+                if (ExplorerDesktop.IsDesktopForeground() && ExplorerDesktop.IsPointOnDesktopSurface(point))
                 {
                     FolderPanel.NotifyDesktopClick(point);
                     DesktopItem[] snapshot; lock (cacheLock) snapshot = cache;
@@ -2621,9 +3185,6 @@ namespace DesktopFoldersDirect
                     else { armedTarget = null; CancelHover(); }
                     return Native.CallNextHookEx(hook, code, message, data);
                 }
-                // Collection tiles remain ordinary movable Desktop items; this version
-                // does not nest one collection inside another.
-                if (source.IsGroup) { CancelHover(); return Native.CallNextHookEx(hook, code, message, data); }
                 DesktopItem target = Hit(point);
                 if (target != null && target.Path != source.Path)
                 {
@@ -2727,10 +3288,17 @@ namespace DesktopFoldersDirect
                     VirtualGroup existing = layout.Groups.FirstOrDefault(g => g.TilePath.Equals(second.Path, StringComparison.OrdinalIgnoreCase));
                     if (existing == null) throw new InvalidDataException("Không tìm thấy virtual group.");
                     if (existing.Members.Any(m => m.Path.Equals(first.Path, StringComparison.OrdinalIgnoreCase))) return;
-                    FileAttributes original = File.GetAttributes(first.Path); VirtualMember added = new VirtualMember { Path = first.Path, OriginalAttributes = (int)original };
+                    VirtualGroup nested = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
+                    if (nested != null)
+                    {
+                        if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, existing.Id)) throw new InvalidOperationException("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.");
+                        VirtualGroup oldParent = VirtualLayoutGraph.ParentsOf(layout, nested.Id).FirstOrDefault();
+                        if (oldParent != null) throw new InvalidOperationException("Collection này đã nằm trong \"" + oldParent.Name + "\".");
+                    }
+                    FileAttributes original = File.GetAttributes(first.Path); VirtualMember added = new VirtualMember { Path = first.Path, OriginalAttributes = (int)original, GroupId = nested == null ? null : nested.Id };
                     try { File.SetAttributes(first.Path, original | FileAttributes.Hidden); existing.Members.Add(added); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(first.Path); }
                     catch { existing.Members.Remove(added); try { File.SetAttributes(first.Path, original); } catch { } throw; }
-                    try { GroupTileFactory.CreateOrUpdate(existing); } catch { }
+                    VirtualLayoutGraph.RefreshGroupAndAncestors(layout, existing.Id);
                     FolderPanel.NotifyLayoutChanged();
                     return;
                 }
@@ -2739,12 +3307,14 @@ namespace DesktopFoldersDirect
                 string tilePath = Path.Combine(ExplorerDesktop.Desktop, name + ".lnk");
                 VirtualGroup group = new VirtualGroup { Id = groupId, Name = name, TilePath = tilePath };
                 group.Members.Add(new VirtualMember { Path = second.Path, OriginalAttributes = (int)secondAttributes });
-                group.Members.Add(new VirtualMember { Path = first.Path, OriginalAttributes = (int)firstAttributes });
+                VirtualGroup nestedFirst = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
+                if (nestedFirst != null && VirtualLayoutGraph.ParentsOf(layout, nestedFirst.Id).Count > 0) throw new InvalidOperationException("Collection này đã nằm trong một collection khác.");
+                group.Members.Add(new VirtualMember { Path = first.Path, OriginalAttributes = (int)firstAttributes, GroupId = nestedFirst == null ? null : nestedFirst.Id });
                 try
                 {
                     File.SetAttributes(second.Path, secondAttributes | FileAttributes.Hidden);
                     File.SetAttributes(first.Path, firstAttributes | FileAttributes.Hidden);
-                    GroupTileFactory.CreateOrUpdate(group); layout.Groups.Add(group); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(first.Path); ExplorerDesktop.NotifyPathChanged(second.Path);
+                    layout.Groups.Add(group); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); ExplorerDesktop.NotifyPathChanged(first.Path); ExplorerDesktop.NotifyPathChanged(second.Path);
                     FolderPanel.NotifyLayoutChanged();
                 }
                 catch
@@ -2818,6 +3388,31 @@ namespace DesktopFoldersDirect
         static void Main(string[] args)
         {
 #if TEST
+            if (args != null && args.Length >= 5 && args[0] == "--test-place-pair")
+            {
+                Point preferred = new Point(Int32.Parse(args[3]), Int32.Parse(args[4])); bool firstPlaced = false, secondPlaced = false;
+                for (int attempt = 0; attempt < 15 && !firstPlaced; attempt++) { ExplorerDesktop.NotifyPathChanged(args[1]); firstPlaced = ExplorerDesktop.TryPlaceAtNearestFreeSlot(args[1], preferred); if (!firstPlaced) Thread.Sleep(60); }
+                for (int attempt = 0; attempt < 15 && !secondPlaced; attempt++) { ExplorerDesktop.NotifyPathChanged(args[2]); secondPlaced = ExplorerDesktop.TryPlaceAtNearestFreeSlot(args[2], preferred); if (!secondPlaced) Thread.Sleep(60); }
+                Rectangle firstBounds, secondBounds; bool distinct = ExplorerDesktop.TryGetIconBounds(args[1], out firstBounds) && ExplorerDesktop.TryGetIconBounds(args[2], out secondBounds) && firstBounds.Location != secondBounds.Location;
+                Environment.Exit(firstPlaced && secondPlaced && distinct ? 0 : 5); return;
+            }
+            if (args != null && args.Length >= 4 && args[0] == "--test-place")
+            {
+                string testPath = args[1]; Point preferred = new Point(Int32.Parse(args[2]), Int32.Parse(args[3])); bool placed = false;
+                for (int attempt = 0; attempt < 15 && !placed; attempt++) { ExplorerDesktop.NotifyPathChanged(testPath); placed = ExplorerDesktop.TryPlaceAtNearestFreeSlot(testPath, preferred); if (!placed) Thread.Sleep(60); }
+                Environment.Exit(placed ? 0 : 4); return;
+            }
+            if (args != null && args.Length >= 1 && args[0] == "--test-layout-graph")
+            {
+                VirtualGroup a = new VirtualGroup { Id = "a", Name = "A", TilePath = "A.lnk" };
+                VirtualGroup b = new VirtualGroup { Id = "b", Name = "B", TilePath = "B.lnk" };
+                VirtualGroup c = new VirtualGroup { Id = "c", Name = "C", TilePath = "C.lnk" };
+                a.Members.Add(new VirtualMember { Path = "B.lnk" }); b.Members.Add(new VirtualMember { Path = "C.lnk", GroupId = "c" });
+                VirtualLayout graph = new VirtualLayout(); graph.Groups.Add(a); graph.Groups.Add(b); graph.Groups.Add(c); VirtualLayoutGraph.Normalize(graph);
+                bool valid = a.Members[0].GroupId == "b" && VirtualLayoutGraph.ContainsGroup(graph, "a", "c") && VirtualLayoutGraph.WouldCreateCycle(graph, "a", "c") && !VirtualLayoutGraph.WouldCreateCycle(graph, "c", "a");
+                VirtualLayoutGraph.ReplaceTilePath(graph, "b", "B.lnk", "B2.lnk"); valid = valid && a.Members[0].Path == "B2.lnk";
+                Environment.Exit(valid ? 0 : 3); return;
+            }
             if (args != null && args.Length >= 5 && args[0] == "--test-tile")
             {
                 VirtualGroup testGroup = new VirtualGroup { Id = args[1], Name = "Test Collection", TilePath = args[2], IconPath = args[3] };

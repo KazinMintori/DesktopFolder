@@ -1,6 +1,6 @@
 # DesktopFolders
 
-<img src="DesktopFolders-icon.png" width="80" alt="DesktopFolders icon — dark slate folder with four colored app tiles">
+<img src="DesktopFolders.png" width="80" alt="DesktopFolders neon folder with four app tiles">
 
 **iPhone-style app groups for your Windows Desktop.**
 
@@ -35,9 +35,13 @@ Drag one Desktop icon onto another, hold for a moment, and they merge into a vir
 | **Compact & Expanded** | Compact 440×520, Expanded 840×600. Always keeps 3 cards per row; centered within viewport. |
 | **Smart anchoring** | Popup positions itself below/above/beside the tile with 10 px gap, avoids overlapping other open panels, and follows the tile when the Desktop rearranges icons. |
 | **Cross-collection drag** | Drag an item from one open collection directly into another without losing hidden state or attributes. |
+| **Nested collections** | Hold a dragged item over the center of another card to create a child collection, or drag an existing collection into another. Cycles are rejected automatically. |
+| **Direct-grab reordering** | The grabbed card follows the pointer while neighboring cards retarget smoothly; use card edges to reorder and the center hold-zone to group. |
+| **Immediate context menu** | Right-click opens the collection actions immediately; the full Explorer extension menu remains available under “Tùy chọn Windows…”. |
+| **Collision-free restore** | Items moved out or restored from a dissolved collection are placed sequentially into the nearest free Desktop grid slots through the supported Shell `IFolderView` API, and the removed tile disappears without a manual refresh. |
 | **Auto-dissolve** | When a group has only one item left, it automatically dissolves back to a standalone icon (configurable). |
 | **Composite tile icon** | Each collection tile shows a 3×3 grid of up to 9 member icons — generated as a PNG-backed 256×256 ICO, not a generic folder icon. |
-| **System tray lifecycle** | No taskbar window. Runs via `ApplicationContext` + `NotifyIcon`. Supports Backup/Restore of the virtual layout (`.desktopfolders` files) and optional Windows startup. |
+| **System tray lifecycle** | No taskbar window. Runs via `ApplicationContext` + `NotifyIcon`. Modern card-based Settings UI with hover delay slider, reduce motion toggle, auto-dissolve, and Windows startup. |
 | **Keyboard accessible** | Tab focus ring, Enter/Space to open, F2 to rename, Ctrl+F to search, Escape to close. Cards and toolbar buttons have accessible names. |
 | **Animation** | Open/close/expand morph overlays using Windows Composition (or graceful GDI fallback). `ReduceMotion` setting disables all animation. |
 
@@ -48,15 +52,15 @@ DesktopFolders **never** creates real folders or moves files. When an item enter
 1. The app saves the file's original `FileAttributes`.
 2. It sets the `Hidden` flag so Explorer no longer shows the standalone icon.
 3. When the item is dragged out or restored, the original attributes are written back and `SHChangeNotify` makes the icon reappear instantly — no manual Desktop refresh needed.
-
-**Tray → "Khôi phục toàn bộ icon rồi Exit"** unhides every member, deletes all collection tiles and their generated icons, and exits cleanly.
+4. Normal exit preserves the virtual layout and collections for the next session.
 
 ## Performance
 
 - The mouse hook only fires when the Desktop Explorer (`Progman` → `SHELLDLL_DefView` → `SysListView32`) is in the foreground.
 - UI Automation scans run every 1.2 s while the Desktop is active; when another app is in the foreground, the timer increments an inactivity counter and after ~12 s calls `EmptyWorkingSet` to release unused memory.
 - Desktop cache refresh after a quick Windows drop uses a dedicated 450 ms timer so icon positions stay accurate without continuous lag.
-- Path notifications use per-file `SHCNE_ATTRIBUTES` + `SHCNE_UPDATEITEM` — never `SHCNE_ASSOCCHANGED` or `UPDATEDIR` broadcasts — so unrelated icons are not disturbed.
+- Path notifications use per-file `SHCNE_ATTRIBUTES`, `SHCNE_UPDATEITEM`, and `SHCNE_DELETE` events — never `UPDATEDIR` broadcasts — so restored/removed icons update immediately without disturbing unrelated icons.
+- Desktop positioning uses `IFolderView::SelectAndPositionItems`; the application does not open or write Explorer process memory.
 - Measured on the dev machine: **0.0 s CPU** over 8 s when Desktop is not in the foreground; private bytes ~38 MB, resident working set drops to ~4 MB after idle trim.
 
 ## Installation
@@ -90,7 +94,7 @@ Right-click the tray icon → **Settings**, or double-click the tray icon.
 # Diagnostic build (writes drag-diagnostic.log to %APPDATA%\DesktopFolders)
 .\build.ps1 -TraceDrag -Output DesktopFolders-test.exe
 
-# Regenerate the flat project icon from geometry (System.Drawing, no external assets)
+# Regenerate DesktopFolders.ico from the canonical DesktopFolders.png artwork
 .\generate-icon.ps1
 ```
 
@@ -101,12 +105,12 @@ The build script auto-detects Windows Composition assemblies (Windows SDK) and e
 The entire application is a single C# file compiled to a WinForms executable with no third-party dependencies.
 
 ```
-DirectDesktopFolders.cs          Entire application source (~2 000 lines)
+DirectDesktopFolders.cs          Entire application source (~3 000 lines)
 ├─ Program                       Entry point, single-instance mutex, --open-group CLI
 ├─ DirectDesktopController       ApplicationContext: tray, mouse hook, drag state machine,
 │                                Desktop scan timer, IPC command window
 ├─ FolderPanel                   Collection popup form: UI, drag-in/out, rename, search,
-│                                cross-collection transfer, dissolve
+│                                reorder, nested collections, transfer, dissolve
 ├─ FolderPreviewOverlay          MERGE_ARMED visual preview (transparent overlay)
 ├─ WindowMorphOverlay            GDI open/close/expand snapshot animation
 ├─ CompositionMotionOverlay      Windows.UI.Composition accelerated motion cue
@@ -124,8 +128,11 @@ DirectDesktopFolders.cs          Entire application source (~2 000 lines)
 
 ```
 DesktopFolders.exe               Release binary
+release/DesktopFolders.exe       Mirrored release binary
 DesktopFolders-source.zip        Source code archive
-DesktopFolders-icon.png          App icon (256×256 PNG)
+DesktopFolders.png               Canonical app icon (128×128 PNG)
+DesktopFolders.ico               ICO generated from the canonical PNG
+build.ps1 / generate-icon.ps1    Reproducible build and icon scripts
 README.md                       This file (English)
 README-DesktopFolders.txt        Detailed documentation (Vietnamese)
 ```
@@ -133,7 +140,7 @@ README-DesktopFolders.txt        Detailed documentation (Vietnamese)
 ## Current limitations
 
 - Only Desktop items backed by a file path (`.lnk`, `.url`, `.exe`, `.appref-ms`, etc.) can be grouped. Virtual system icons like Recycle Bin are not supported.
-- Collection tiles are standard `.lnk` shortcuts. Nesting one collection inside another is intentionally disabled.
+- Collection tiles are standard `.lnk` shortcuts. Nested collections are supported, but cyclic containment (A → B → A) is intentionally blocked.
 - Windows-only; depends on the classic Desktop Explorer shell (`SysListView32`).
 
 ## IPC & single instance

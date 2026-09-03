@@ -1,2 +1,8 @@
-# Work directory
+bin/
+obj/
+*.pdb
+*.user
+*.suo
+DesktopFolders-*.exe
+drag-diagnostic.log
 DesktopFolders-v6-work/

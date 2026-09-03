@@ -22,6 +22,12 @@ Cách hoạt động:
 - Command window được tạo trước registry/tile rebuild/UI Automation. Request mở được coalesce theo groupId; sender retry trong startup và có request-file fallback nếu IPC chưa sẵn sàng, nên single-instance mutex không thể làm mất lệnh mở.
 - Có thể kéo item ngoài vào collapsed collection hoặc expanded panel; standalone icon bị ẩn và chỉ còn trong collection.
 - Có thể kéo item từ expanded panel trở lại Desktop để khôi phục standalone icon và thuộc tính gốc. Drag nội bộ không gửi FileDrop cho Explorer nên không còn lỗi “same destination”; SHChangeNotify làm icon hiện ngay mà không cần refresh.
+- Khi kéo trong panel, card đang cầm bám trực tiếp theo con trỏ; các card lân cận tiếp tục chuyển động từ frame hiện tại nên có thể rê qua lại mà không bị nhảy vị trí.
+- Card gốc chuyển thành placeholder rỗng trong lúc kéo; ghost có shadow bám con trỏ bằng timer riêng. Swap dùng critically-damped spring có vận tốc liên tục nên đổi hướng ngay giữa animation.
+- Menu chuột phải dựng sẵn và hiện ngay; mục “Tùy chọn Windows…” mở riêng menu Shell đầy đủ khi cần.
+- Icon đưa ra Desktop và icon còn lại sau khi hủy collection được xếp tuần tự vào ô lưới trống gần nhất qua Shell IFolderView. Ứng dụng không mở/ghi bộ nhớ tiến trình Explorer. Tile collection bị xóa bằng thông báo SHCNE_DELETE nên không cần refresh Desktop.
+- Thả qua mép card để sắp xếp. Giữ ở vùng giữa card theo hover delay để tạo collection con; nếu card đích đã là collection thì item/collection đang cầm được chuyển vào collection đó.
+- Có thể kéo một collection ngoài Desktop vào collection khác. Dữ liệu dùng GroupId ổn định, tự cập nhật đường dẫn khi đổi tên và chặn mọi vòng lặp A chứa B rồi B chứa A.
 - Folder tự giải thể khi còn một item nếu tùy chọn này được bật.
 
 Khả năng nhận diện:
@@ -37,11 +43,10 @@ Hiệu năng và an toàn:
 - Không còn gửi LVM_SETITEMPOSITION theo index UI Automation, không phát UPDATEDIR/ASSOCCHANGED toàn Desktop khi cập nhật tile; chỉ gửi thông báo attributes/update cho đúng path để tránh làm icon không liên quan đổi vị trí.
 - Quét UI Automation thường xuyên chỉ khi Desktop đang foreground; khi dùng ứng dụng khác, tiến trình nền ngủ và chủ động trả working set không dùng cho Windows.
 - Smoke test trên máy build: 0.0000 giây CPU trong 8 giây khi Desktop không foreground; private bytes khoảng 38 MB, resident working set giảm còn khoảng 4 MB sau idle trim.
-- Backup/Restore lưu virtual layout dạng JSON.
+- Giao diện Settings card-based hiện đại cho phép chỉnh thanh trượt độ trễ gộp nhóm (Hover Delay), bật/tắt tự giải thể khi còn 1 item, giảm chuyển động (Reduce Motion) và khởi động cùng Windows.
 - Không có startup/status window hoặc taskbar window; vòng đời dùng ApplicationContext + tray icon.
 - Keyboard: Tab có focus ring, Enter/Space mở app, F2 đổi tên, Ctrl+F tìm kiếm và Escape đóng. App card/toolbar có accessible name; item ghim có accessible description và marker vector.
-- Menu tray > Khôi phục toàn bộ icon rồi Exit sẽ trả lại thuộc tính gốc, xóa tile/icon collection và thoát.
-- Exit thông thường giữ bố cục virtual cho lần chạy sau.
+- Menu tray gồm: trạng thái hoạt động, Settings..., và Exit. Thoát thông thường giữ nguyên bố cục virtual và các icon Desktop cho lần chạy sau.
 
 Mã nguồn C# có trong DesktopFolders-source.zip.
 
