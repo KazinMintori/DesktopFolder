@@ -13,6 +13,10 @@ using System.Web.Script.Serialization;
 using System.Windows.Automation;
 using System.Windows.Forms;
 using Microsoft.Win32;
+#if WINDOWS_COMPOSITION
+using System.Numerics;
+using Windows.UI.Composition;
+#endif
 
 [assembly: AssemblyTitle("Desktop Folders v6")]
 [assembly: AssemblyDescription("Virtual iPhone-style collections for Windows Desktop")]
@@ -267,6 +271,10 @@ namespace DesktopFoldersDirect
         [DllImport("psapi.dll")] internal static extern bool EmptyWorkingSet(IntPtr process);
         [DllImport("shell32.dll")] internal static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
         [DllImport("user32.dll")] internal static extern bool DestroyIcon(IntPtr icon);
+#if WINDOWS_COMPOSITION
+        [StructLayout(LayoutKind.Sequential)] internal struct DispatcherQueueOptions { internal int dwSize; internal int threadType; internal int apartmentType; }
+        [DllImport("coremessaging.dll", EntryPoint = "CreateDispatcherQueueController", CharSet = CharSet.Unicode)] internal static extern int CreateDispatcherQueueController(DispatcherQueueOptions options, [MarshalAs(UnmanagedType.IUnknown)] out object controller);
+#endif
     }
 
     internal static class ExplorerDesktop
@@ -651,78 +659,308 @@ namespace DesktopFoldersDirect
         protected override void Dispose(bool disposing) { if (disposing) animation.Dispose(); base.Dispose(disposing); }
     }
 
+    [ComImport, Guid("000214E6-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellFolderNative
+    {
+        [PreserveSig] int ParseDisplayName(IntPtr hwnd, IntPtr bindContext, [MarshalAs(UnmanagedType.LPWStr)] string displayName, ref uint eaten, out IntPtr itemIdList, ref uint attributes);
+        [PreserveSig] int EnumObjects(IntPtr hwnd, uint flags, out IntPtr enumIdList);
+        [PreserveSig] int BindToObject(IntPtr itemIdList, IntPtr bindContext, ref Guid interfaceId, out IntPtr result);
+        [PreserveSig] int BindToStorage(IntPtr itemIdList, IntPtr bindContext, ref Guid interfaceId, out IntPtr result);
+        [PreserveSig] int CompareIDs(IntPtr parameter, IntPtr first, IntPtr second);
+        [PreserveSig] int CreateViewObject(IntPtr hwnd, ref Guid interfaceId, out IntPtr result);
+        [PreserveSig] int GetAttributesOf(uint count, IntPtr[] itemIdLists, ref uint attributes);
+        [PreserveSig] int GetUIObjectOf(IntPtr hwnd, uint count, [MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] IntPtr[] itemIdLists, ref Guid interfaceId, IntPtr reserved, [MarshalAs(UnmanagedType.Interface)] out object result);
+    }
+
+    [ComImport, Guid("000214E4-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IContextMenuNative
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr menu, uint index, uint firstCommand, uint lastCommand, uint flags);
+        [PreserveSig] int InvokeCommand(ref ShellContextMenu.CommandInfo command);
+        [PreserveSig] int GetCommandString(UIntPtr command, uint flags, IntPtr reserved, IntPtr name, uint nameLength);
+    }
+
+    [ComImport, Guid("000214F4-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IContextMenu2Native
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr menu, uint index, uint firstCommand, uint lastCommand, uint flags);
+        [PreserveSig] int InvokeCommand(ref ShellContextMenu.CommandInfo command);
+        [PreserveSig] int GetCommandString(UIntPtr command, uint flags, IntPtr reserved, IntPtr name, uint nameLength);
+        [PreserveSig] int HandleMenuMsg(uint message, IntPtr wParam, IntPtr lParam);
+    }
+
+    [ComImport, Guid("BCFCE0A0-EC17-11D0-8D10-00A0C90F2719"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IContextMenu3Native
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr menu, uint index, uint firstCommand, uint lastCommand, uint flags);
+        [PreserveSig] int InvokeCommand(ref ShellContextMenu.CommandInfo command);
+        [PreserveSig] int GetCommandString(UIntPtr command, uint flags, IntPtr reserved, IntPtr name, uint nameLength);
+        [PreserveSig] int HandleMenuMsg(uint message, IntPtr wParam, IntPtr lParam);
+        [PreserveSig] int HandleMenuMsg2(uint message, IntPtr wParam, IntPtr lParam, out IntPtr result);
+    }
+
+    internal static class ShellContextMenu
+    {
+        const uint PinCommand = 1, MoveOutCommand = 2, ShellFirstCommand = 0x1000, ShellLastCommand = 0x7FFF;
+        const uint MfByPosition = 0x00000400, MfString = 0, MfSeparator = 0x00000800;
+        const uint TpmRightButton = 0x0002, TpmReturnCommand = 0x0100;
+        const uint CmicMaskUnicode = 0x00004000, CmicMaskPointInvoke = 0x20000000;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        internal struct CommandInfo
+        {
+            internal int cbSize; internal uint fMask; internal IntPtr hwnd; internal IntPtr lpVerb;
+            [MarshalAs(UnmanagedType.LPStr)] internal string lpParameters;
+            [MarshalAs(UnmanagedType.LPStr)] internal string lpDirectory;
+            internal int nShow; internal uint dwHotKey; internal IntPtr hIcon;
+            [MarshalAs(UnmanagedType.LPStr)] internal string lpTitle;
+            internal IntPtr lpVerbW;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string lpParametersW;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string lpDirectoryW;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string lpTitleW;
+            internal Native.POINT ptInvoke;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHParseDisplayName(string name, IntPtr bindContext, out IntPtr itemIdList, uint attributesIn, out uint attributesOut);
+        [DllImport("shell32.dll")] static extern int SHBindToParent(IntPtr itemIdList, ref Guid interfaceId, [MarshalAs(UnmanagedType.Interface)] out IShellFolderNative parent, out IntPtr childItemIdList);
+        [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool InsertMenu(IntPtr menu, uint position, uint flags, UIntPtr command, string text);
+        [DllImport("user32.dll")] static extern uint TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr owner, IntPtr parameters);
+        [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr menu);
+
+        internal static void Show(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction)
+        {
+            if (owner == null || owner.IsDisposed || String.IsNullOrEmpty(path)) return;
+            IntPtr absolute = IntPtr.Zero, menu = IntPtr.Zero; IShellFolderNative parent = null; object rawContext = null;
+            try
+            {
+                uint attributes; if (SHParseDisplayName(path, IntPtr.Zero, out absolute, 0, out attributes) < 0 || absolute == IntPtr.Zero) throw new InvalidOperationException("Shell item unavailable.");
+                Guid folderId = typeof(IShellFolderNative).GUID; IntPtr child; if (SHBindToParent(absolute, ref folderId, out parent, out child) < 0 || parent == null) throw new InvalidOperationException("Shell parent unavailable.");
+                Guid contextId = typeof(IContextMenuNative).GUID; if (parent.GetUIObjectOf(owner.Handle, 1, new IntPtr[] { child }, ref contextId, IntPtr.Zero, out rawContext) < 0 || rawContext == null) throw new InvalidOperationException("Shell context menu unavailable.");
+                IContextMenuNative context = (IContextMenuNative)rawContext; menu = CreatePopupMenu(); if (menu == IntPtr.Zero) throw new InvalidOperationException("Popup menu unavailable.");
+                InsertMenu(menu, 0, MfByPosition | MfString, (UIntPtr)PinCommand, pinText); InsertMenu(menu, 1, MfByPosition | MfString, (UIntPtr)MoveOutCommand, "Đưa ra Desktop"); InsertMenu(menu, 2, MfByPosition | MfSeparator, UIntPtr.Zero, null);
+                context.QueryContextMenu(menu, 3, ShellFirstCommand, ShellLastCommand, 0);
+                using (ShellMenuMessageWindow messages = new ShellMenuMessageWindow(owner.Handle, rawContext))
+                {
+                    Point point = Cursor.Position; DataStore.LogDrag("SHELL_MENU native path=" + path); uint selected = TrackPopupMenuEx(menu, TpmRightButton | TpmReturnCommand, point.X, point.Y, owner.Handle, IntPtr.Zero); DataStore.LogDrag("SHELL_MENU selected=" + selected);
+                    if (selected == PinCommand) { if (pinAction != null) pinAction(); }
+                    else if (selected == MoveOutCommand) { if (moveOutAction != null) moveOutAction(); }
+                    else if (selected >= ShellFirstCommand && selected <= ShellLastCommand)
+                    {
+                        IntPtr verb = (IntPtr)(selected - ShellFirstCommand); CommandInfo command = new CommandInfo { cbSize = Marshal.SizeOf(typeof(CommandInfo)), fMask = CmicMaskUnicode | CmicMaskPointInvoke, hwnd = owner.Handle, lpVerb = verb, lpVerbW = verb, nShow = 1, ptInvoke = new Native.POINT { x = point.X, y = point.Y } };
+                        context.InvokeCommand(ref command);
+                    }
+                }
+            }
+            catch (Exception error) { DataStore.LogDrag("SHELL_MENU fallback=" + error); ShowFallback(owner, path, pinText, pinAction, moveOutAction); }
+            finally
+            {
+                if (menu != IntPtr.Zero) DestroyMenu(menu); if (rawContext != null && Marshal.IsComObject(rawContext)) Marshal.FinalReleaseComObject(rawContext); if (parent != null && Marshal.IsComObject(parent)) Marshal.FinalReleaseComObject(parent); if (absolute != IntPtr.Zero) Marshal.FreeCoTaskMem(absolute);
+            }
+        }
+        static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction)
+        {
+            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
+        }
+
+        sealed class ShellMenuMessageWindow : NativeWindow, IDisposable
+        {
+            readonly IContextMenu2Native menu2;
+            readonly IContextMenu3Native menu3;
+            internal ShellMenuMessageWindow(IntPtr handle, object context)
+            {
+                try { menu3 = context as IContextMenu3Native; } catch { }
+                try { menu2 = context as IContextMenu2Native; } catch { }
+                AssignHandle(handle);
+            }
+            protected override void WndProc(ref Message message)
+            {
+                if (message.Msg == 0x0117 || message.Msg == 0x002B || message.Msg == 0x002C || message.Msg == 0x0120)
+                {
+                    if (menu3 != null) { IntPtr result; if (menu3.HandleMenuMsg2((uint)message.Msg, message.WParam, message.LParam, out result) >= 0) { message.Result = result; return; } }
+                    if (menu2 != null && menu2.HandleMenuMsg((uint)message.Msg, message.WParam, message.LParam) >= 0) { message.Result = IntPtr.Zero; return; }
+                }
+                base.WndProc(ref message);
+            }
+            public void Dispose() { try { ReleaseHandle(); } catch { } }
+        }
+    }
+
     internal sealed class AppTile : Panel
     {
         readonly Image icon;
         readonly string label;
         readonly bool pinned;
         readonly bool gridMode;
+        readonly Color accent;
+        readonly bool reduceMotion;
+        System.Windows.Forms.Timer hoverAnimation;
+        float hoverProgress;
         bool hot;
+        bool dragOver;
+        bool dragging;
+        internal string ItemPath { get; private set; }
 
-        internal AppTile(string path, bool isPinned, bool grid, int width)
+        internal AppTile(string path, bool isPinned, bool grid, int width, bool reducedMotion)
         {
-            label = Path.GetFileNameWithoutExtension(path); pinned = isPinned; gridMode = grid; icon = IconLoader.ForPath(path);
-            Size = grid ? new Size(width, width < 170 ? 112 : 164) : new Size(width, 76); BackColor = Color.Transparent; Cursor = Cursors.Hand;
+            ItemPath = path; label = Path.GetFileNameWithoutExtension(path); pinned = isPinned; gridMode = grid; icon = IconLoader.ForPath(path);
+            accent = AccentFromIcon(icon); reduceMotion = reducedMotion;
+            Size = grid ? new Size(width, width < 170 ? 106 : 134) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
             TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? "Đã ghim ưu tiên" : "";
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         }
         protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) Focus(); base.OnMouseDown(e); }
-        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
-        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+        protected override void OnMouseEnter(EventArgs e) { hot = true; BeginHoverTransition(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; BeginHoverTransition(); base.OnMouseLeave(e); }
+        protected override void OnGotFocus(EventArgs e) { BeginHoverTransition(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { BeginHoverTransition(); base.OnLostFocus(e); }
         protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { OnClick(EventArgs.Empty); e.Handled = true; } base.OnKeyDown(e); }
+        internal void SetDragVisual(bool isDragging, bool isDropTarget) { dragging = isDragging; dragOver = isDropTarget; BeginHoverTransition(); }
+        void BeginHoverTransition()
+        {
+            float target = hot || dragOver || Focused ? 1f : 0f;
+            if (reduceMotion) { hoverProgress = target; Invalidate(); return; }
+            if (hoverAnimation == null) { hoverAnimation = new System.Windows.Forms.Timer { Interval = 15 }; hoverAnimation.Tick += delegate { AnimateHover(); }; }
+            hoverAnimation.Stop(); hoverAnimation.Start(); Invalidate();
+        }
+        void AnimateHover()
+        {
+            float target = hot || dragOver || Focused ? 1f : 0f; hoverProgress += (target - hoverProgress) * .34f;
+            if (Math.Abs(target - hoverProgress) < .018f) { hoverProgress = target; hoverAnimation.Stop(); }
+            Invalidate();
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            Rectangle card = new Rectangle(0, 0, Width - 2, Height - 2);
-            using (Brush fill = new SolidBrush(hot || Focused ? CollectionTheme.SurfaceHover : CollectionTheme.Surface)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
-            if (Focused) using (Pen focus = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawRoundedRectangle(focus, Rectangle.Inflate(card, -1, -1), CollectionTheme.RadiusCard - 1);
+            float interaction = Math.Max(0f, Math.Min(1f, hoverProgress)); int inset = 3 - (int)Math.Round(interaction * 2f);
+            int maximumCardHeight = gridMode ? (Width < 170 ? 76 : 100) : Height - 1;
+            Rectangle card = new Rectangle(inset, inset, Math.Max(8, Width - inset * 2 - 1), Math.Max(8, maximumCardHeight - (inset - 1) * 2));
+            Color top = Mix(CollectionTheme.Surface, accent, .23f + .11f * interaction);
+            Color bottom = Mix(CollectionTheme.Surface, accent, .08f + .07f * interaction);
+            using (System.Drawing.Drawing2D.LinearGradientBrush fill = new System.Drawing.Drawing2D.LinearGradientBrush(card, top, bottom, 90f)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
+            Rectangle glow = new Rectangle(card.X + card.Width / 5, card.Y + card.Height / 5, card.Width * 3 / 5, card.Height * 3 / 5);
+            using (System.Drawing.Drawing2D.GraphicsPath glowPath = new System.Drawing.Drawing2D.GraphicsPath())
+            {
+                glowPath.AddEllipse(glow);
+                using (System.Drawing.Drawing2D.PathGradientBrush radial = new System.Drawing.Drawing2D.PathGradientBrush(glowPath))
+                {
+                    radial.CenterColor = Color.FromArgb((int)(42 + 34 * interaction), accent); radial.SurroundColors = new Color[] { Color.FromArgb(0, accent) }; e.Graphics.FillPath(radial, glowPath);
+                }
+            }
+            Color idleEdge = Mix(CollectionTheme.Stroke, accent, .34f); Color edgeColor = Mix(idleEdge, accent, .72f * interaction);
+            using (Pen edge = new Pen(edgeColor, dragOver ? 2f : 1f + .35f * interaction)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
+            if (Focused) using (Pen focus = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawRoundedRectangle(focus, Rectangle.Inflate(card, -2, -2), CollectionTheme.RadiusCard - 2);
             if (pinned)
             {
-                using (Pen pin = new Pen(CollectionTheme.Focus, 1.6f)) { e.Graphics.DrawEllipse(pin, Width - 18, 10, 7, 7); e.Graphics.DrawLine(pin, Width - 14.5f, 17, Width - 14.5f, 23); }
+                Rectangle badge = new Rectangle(card.Right - 21, card.Top + 6, 15, 15);
+                using (Brush badgeFill = new SolidBrush(Color.FromArgb(185, 8, 9, 12))) e.Graphics.FillEllipse(badgeFill, badge);
+                using (Pen badgeEdge = new Pen(Color.FromArgb(75, 255, 255, 255))) e.Graphics.DrawEllipse(badgeEdge, badge);
+                using (Brush star = new SolidBrush(CollectionTheme.Pin))
+                using (System.Drawing.Drawing2D.GraphicsPath starShape = StarPath(new PointF(badge.X + 7.5f, badge.Y + 7.5f), 4.3f, 2.0f)) e.Graphics.FillPath(star, starShape);
             }
             if (gridMode && Width < 170)
             {
-                int iconSize = 44, iconX = (Width - iconSize) / 2;
-                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, 10, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 9f, FontStyle.Bold))
+                int iconSize = 42 + (int)Math.Round(3 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
+                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
+                using (Font name = new Font("Segoe UI", 9f, FontStyle.Regular))
                 using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(6, 58, Width - 12, 49), format);
+                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(4, 82, Width - 8, 20), format);
             }
             else if (gridMode)
             {
-                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(24, 50, 64, 64));
-                using (Font name = new Font("Segoe UI", 12f, FontStyle.Bold))
-                using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(104, 28, Math.Max(40, Width - 120), 108), format);
+                int iconSize = 56 + (int)Math.Round(4 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
+                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
+                using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
+                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(6, 108, Width - 12, 22), format);
             }
             else
             {
-                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(14, 12, 52, 52));
-                using (Font name = new Font("Segoe UI", 11f, FontStyle.Bold))
+                int iconSize = 42 + (int)Math.Round(3 * interaction), iconY = (Height - iconSize) / 2;
+                if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(12, iconY, iconSize, iconSize));
+                using (Font name = new Font("Segoe UI", 10f, FontStyle.Bold))
                 using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(82, 10, Math.Max(40, Width - 96), 56), format);
+                using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(68, 6, Math.Max(40, Width - 84), 50), format);
             }
+            if (dragging) using (Brush veil = new SolidBrush(Color.FromArgb(118, CollectionTheme.Background))) e.Graphics.FillRoundedRectangle(veil, card, CollectionTheme.RadiusCard);
         }
-        protected override void Dispose(bool disposing) { if (disposing && icon != null) icon.Dispose(); base.Dispose(disposing); }
+        static Color Mix(Color background, Color foreground, float amount)
+        {
+            amount = Math.Max(0f, Math.Min(1f, amount));
+            return Color.FromArgb((int)(background.R + (foreground.R - background.R) * amount), (int)(background.G + (foreground.G - background.G) * amount), (int)(background.B + (foreground.B - background.B) * amount));
+        }
+        static Color AccentFromIcon(Image image)
+        {
+            try
+            {
+                using (Bitmap sample = new Bitmap(image, new Size(20, 20)))
+                {
+                    long r = 0, g = 0, b = 0, weight = 0;
+                    for (int y = 0; y < sample.Height; y += 2) for (int x = 0; x < sample.Width; x += 2)
+                    {
+                        Color c = sample.GetPixel(x, y); if (c.A < 90) continue;
+                        int spread = Math.Max(c.R, Math.Max(c.G, c.B)) - Math.Min(c.R, Math.Min(c.G, c.B)); int w = Math.Max(1, spread);
+                        r += c.R * w; g += c.G * w; b += c.B * w; weight += w;
+                    }
+                    if (weight > 0) return Color.FromArgb(Math.Max(55, Math.Min(230, (int)(r / weight))), Math.Max(55, Math.Min(230, (int)(g / weight))), Math.Max(55, Math.Min(230, (int)(b / weight))));
+                }
+            }
+            catch { }
+            return CollectionTheme.Focus;
+        }
+        static System.Drawing.Drawing2D.GraphicsPath StarPath(PointF center, float outer, float inner)
+        {
+            System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath(); PointF[] points = new PointF[10];
+            for (int i = 0; i < 10; i++) { double angle = -Math.PI / 2 + i * Math.PI / 5; float radius = (i % 2 == 0) ? outer : inner; points[i] = new PointF(center.X + (float)Math.Cos(angle) * radius, center.Y + (float)Math.Sin(angle) * radius); }
+            path.AddPolygon(points); return path;
+        }
+        protected override void Dispose(bool disposing) { if (disposing) { if (hoverAnimation != null) hoverAnimation.Dispose(); if (icon != null) icon.Dispose(); } base.Dispose(disposing); }
     }
 
     internal static class CollectionTheme
     {
-        internal static readonly Color Background = Color.FromArgb(15, 23, 42);
-        internal static readonly Color Surface = Color.FromArgb(27, 35, 54);
-        internal static readonly Color SurfaceHover = Color.FromArgb(38, 49, 72);
-        internal static readonly Color Control = Color.FromArgb(30, 41, 59);
-        internal static readonly Color ControlActive = Color.FromArgb(51, 65, 85);
-        internal static readonly Color Border = Color.FromArgb(71, 85, 105);
-        internal static readonly Color Focus = Color.FromArgb(147, 197, 253);
-        internal static readonly Color Text = Color.FromArgb(248, 250, 252);
-        internal static readonly Color MutedText = Color.FromArgb(148, 163, 184);
-        internal static readonly Color Danger = Color.FromArgb(190, 50, 60);
-        internal const int RadiusWindow = 24;
+        internal static readonly Color Background = Color.FromArgb(10, 11, 14);
+        internal static readonly Color Surface = Color.FromArgb(16, 18, 24);
+        internal static readonly Color SurfaceHover = Color.FromArgb(27, 30, 39);
+        internal static readonly Color Control = Color.FromArgb(16, 18, 24);
+        internal static readonly Color ControlActive = Color.FromArgb(31, 34, 44);
+        internal static readonly Color Border = Color.FromArgb(39, 42, 52);
+        internal static readonly Color Stroke = Color.FromArgb(33, 36, 45);
+        internal static readonly Color Focus = Color.FromArgb(124, 147, 255);
+        internal static readonly Color Text = Color.FromArgb(245, 246, 248);
+        internal static readonly Color SecondaryText = Color.FromArgb(182, 185, 194);
+        internal static readonly Color MutedText = Color.FromArgb(122, 126, 138);
+        internal static readonly Color Pin = Color.FromArgb(255, 215, 106);
+        internal static readonly Color Danger = Color.FromArgb(255, 84, 84);
+        internal const int RadiusWindow = 22;
         internal const int RadiusControl = 12;
         internal const int RadiusCard = 16;
+    }
+
+    internal sealed class SectionHeaderControl : Control
+    {
+        readonly string label;
+        readonly int count;
+        internal SectionHeaderControl(string sectionLabel, int itemCount, int width)
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            label = sectionLabel.ToUpperInvariant(); count = itemCount; Size = new Size(width, 28); BackColor = Color.Transparent; TabStop = false; Margin = new Padding(2, 6, 2, 3);
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (Brush accent = new SolidBrush(CollectionTheme.Focus)) e.Graphics.FillEllipse(accent, 1, 10, 5, 5);
+            float labelWidth;
+            using (Font heading = new Font("Segoe UI", 7.8f, FontStyle.Bold))
+            using (Brush text = new SolidBrush(CollectionTheme.SecondaryText)) { e.Graphics.DrawString(label, heading, text, new PointF(13, 7)); labelWidth = e.Graphics.MeasureString(label, heading).Width; }
+            string value = count.ToString(); SizeF measured;
+            using (Font number = new Font("Segoe UI", 7.5f, FontStyle.Bold)) measured = e.Graphics.MeasureString(value, number);
+            RectangleF pill = new RectangleF(Math.Min(Width - 28, 19 + labelWidth), 6, Math.Max(21, measured.Width + 10), 17);
+            using (Brush fill = new SolidBrush(CollectionTheme.ControlActive)) e.Graphics.FillRoundedRectangle(fill, Rectangle.Round(pill), 8);
+            using (Font number = new Font("Segoe UI", 7.5f, FontStyle.Bold))
+            using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            using (Brush muted = new SolidBrush(CollectionTheme.MutedText)) e.Graphics.DrawString(value, number, muted, pill, format);
+        }
     }
 
     internal enum HeaderIconKind { Close, Expand, Collapse, Grid, List }
@@ -736,8 +974,8 @@ namespace DesktopFoldersDirect
         internal bool Selected { get { return selected; } set { selected = value; AccessibleDescription = value ? "Đang chọn" : ""; Invalidate(); } }
         internal HeaderIconButton(HeaderIconKind iconKind, int width)
         {
-            kind = iconKind; Width = width; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = CollectionTheme.Background; ForeColor = CollectionTheme.Text; Cursor = Cursors.Hand; TabStop = true; Text = ""; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            kind = iconKind; Width = width; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.Transparent; ForeColor = CollectionTheme.SecondaryText; Cursor = Cursors.Hand; TabStop = true; Text = ""; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         }
         protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
@@ -746,10 +984,11 @@ namespace DesktopFoldersDirect
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.Clear(BackColor);
             Rectangle box = new Rectangle(4, 5, Math.Max(10, Width - 8), Math.Max(10, Height - 10));
-            Color background = hot || Focused ? (kind == HeaderIconKind.Close ? CollectionTheme.Danger : CollectionTheme.ControlActive) : (selected ? CollectionTheme.ControlActive : Color.Transparent);
+            Color background = hot || Focused ? (kind == HeaderIconKind.Close ? Color.FromArgb(48, CollectionTheme.Danger) : CollectionTheme.ControlActive) : (selected ? Color.FromArgb(35, CollectionTheme.Focus) : Color.Transparent);
+            Color glyph = selected ? CollectionTheme.Focus : (hot ? CollectionTheme.Text : ForeColor);
             if (background.A > 0) using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 8);
             float cx = Width / 2f, cy = Height / 2f;
-            using (Pen pen = new Pen(ForeColor, 1.8f))
+            using (Pen pen = new Pen(kind == HeaderIconKind.Close && hot ? Color.FromArgb(255, 128, 128) : glyph, 1.6f))
             {
                 pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
                 if (kind == HeaderIconKind.Close)
@@ -783,7 +1022,7 @@ namespace DesktopFoldersDirect
     {
         internal SearchGlyphControl()
         {
-            BackColor = CollectionTheme.Control; ForeColor = CollectionTheme.Text; TabStop = false; AccessibleRole = AccessibleRole.None;
+            BackColor = CollectionTheme.Control; ForeColor = CollectionTheme.MutedText; TabStop = false; AccessibleRole = AccessibleRole.None;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
         }
         protected override void OnPaint(PaintEventArgs e)
@@ -793,6 +1032,135 @@ namespace DesktopFoldersDirect
             using (Pen pen = new Pen(ForeColor, 1.8f)) { pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round; e.Graphics.DrawEllipse(pen, cx - 7, cy - 7, 13, 13); e.Graphics.DrawLine(pen, cx + 4, cy + 4, cx + 10, cy + 10); }
         }
     }
+
+#if WINDOWS_COMPOSITION
+    // Windows Composition is deliberately isolated from the rest of the WinForms UI.
+    // It is a best-effort visual cue: the collection itself is placed at its final
+    // anchor before it is shown, so a compositor failure can never reintroduce a
+    // late or stale-position popup.
+    [ComImport]
+    [Guid("29E691FA-4567-4DCA-B319-D0F207EB6807")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface ICompositorDesktopInterop
+    {
+        void CreateDesktopWindowTarget(IntPtr hwndTarget, bool isTopmost, out IntPtr target);
+    }
+
+    [ComImport]
+    [Guid("A1BEA8BA-D726-4663-8129-6B5E7927FFA6")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
+    internal interface ICompositionTargetInterop
+    {
+        Visual Root { get; set; }
+    }
+
+    internal sealed class CompositionMotionOverlay : Form
+    {
+        static readonly object DispatcherLock = new object();
+        static object sharedDispatcherQueue;
+        static bool dispatcherAttempted;
+        readonly Rectangle sourceBounds;
+        readonly Rectangle destinationBounds;
+        Action completed;
+        object dispatcherQueue;
+        Compositor compositor;
+        ICompositionTargetInterop target;
+        ContainerVisual root;
+        SpriteVisual token;
+        System.Windows.Forms.Timer fallback;
+        bool finished;
+
+        internal CompositionMotionOverlay(Rectangle source, Rectangle destination, Action onCompleted)
+        {
+            sourceBounds = Normalize(source); destinationBounds = Normalize(destination); completed = onCompleted;
+            Rectangle union = Rectangle.Union(sourceBounds, destinationBounds); union.Inflate(4, 4);
+            FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; BackColor = Color.Magenta; TransparencyKey = Color.Magenta; Bounds = union;
+            Shown += delegate { BeginComposition(); };
+        }
+        protected override bool ShowWithoutActivation { get { return true; } }
+        protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ExStyle |= Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TRANSPARENT; return p; } }
+        static Rectangle Normalize(Rectangle value) { return new Rectangle(value.X, value.Y, Math.Max(28, value.Width), Math.Max(28, value.Height)); }
+        void BeginComposition()
+        {
+            try
+            {
+                EnsureDispatcherQueue(); dispatcherQueue = sharedDispatcherQueue;
+                compositor = new Compositor();
+                ICompositorDesktopInterop interop = (ICompositorDesktopInterop)(object)compositor;
+                IntPtr rawTarget; interop.CreateDesktopWindowTarget(Handle, true, out rawTarget);
+                if (rawTarget == IntPtr.Zero) throw new InvalidOperationException("Windows Composition target unavailable.");
+                try { target = (ICompositionTargetInterop)Marshal.GetObjectForIUnknown(rawTarget); }
+                finally { Marshal.Release(rawTarget); }
+                root = compositor.CreateContainerVisual(); root.RelativeSizeAdjustment = new Vector2(1.0f, 1.0f); target.Root = root;
+                token = compositor.CreateSpriteVisual();
+                token.Brush = compositor.CreateColorBrush(Windows.UI.Color.FromArgb(46, CollectionTheme.Focus.R, CollectionTheme.Focus.G, CollectionTheme.Focus.B));
+                token.Opacity = 0.0f;
+                token.Size = new Vector2(sourceBounds.Width, sourceBounds.Height);
+                token.Offset = new Vector3(sourceBounds.Left - Left, sourceBounds.Top - Top, 0);
+                root.Children.InsertAtTop(token);
+
+                Vector3 sourceOffset = new Vector3(sourceBounds.Left - Left, sourceBounds.Top - Top, 0);
+                Vector3 destinationOffset = new Vector3(destinationBounds.Left - Left, destinationBounds.Top - Top, 0);
+                Vector2 sourceSize = new Vector2(sourceBounds.Width, sourceBounds.Height);
+                Vector2 destinationSize = new Vector2(destinationBounds.Width, destinationBounds.Height);
+                CubicBezierEasingFunction easeOut = compositor.CreateCubicBezierEasingFunction(new Vector2(0.12f, 0.0f), new Vector2(0.0f, 1.0f));
+                Vector3KeyFrameAnimation offset = compositor.CreateVector3KeyFrameAnimation(); offset.InsertKeyFrame(0.0f, sourceOffset); offset.InsertKeyFrame(1.0f, destinationOffset, easeOut); offset.Duration = TimeSpan.FromMilliseconds(140);
+                Vector2KeyFrameAnimation size = compositor.CreateVector2KeyFrameAnimation(); size.InsertKeyFrame(0.0f, sourceSize); size.InsertKeyFrame(1.0f, destinationSize, easeOut); size.Duration = offset.Duration;
+                ScalarKeyFrameAnimation opacity = compositor.CreateScalarKeyFrameAnimation(); opacity.InsertKeyFrame(0.0f, 0.0f); opacity.InsertKeyFrame(0.10f, 0.20f); opacity.InsertKeyFrame(0.72f, 0.10f, easeOut); opacity.InsertKeyFrame(1.0f, 0.0f, easeOut); opacity.Duration = offset.Duration;
+                token.StartAnimation("Offset", offset); token.StartAnimation("Size", size); token.StartAnimation("Opacity", opacity);
+                // The compositor owns the visual frames. The UI timer only retires
+                // the transparent host after the 140 ms timeline has completed.
+                fallback = new System.Windows.Forms.Timer { Interval = 155 }; fallback.Tick += delegate { fallback.Stop(); Finish(); }; fallback.Start();
+            }
+            catch
+            {
+                // Old Windows builds and remote sessions may not expose a Composition
+                // target. Finish quietly; opening still remains synchronous.
+                fallback = new System.Windows.Forms.Timer { Interval = 1 }; fallback.Tick += delegate { fallback.Stop(); Finish(); }; fallback.Start();
+            }
+        }
+        static void EnsureDispatcherQueue()
+        {
+            lock (DispatcherLock)
+            {
+                if (dispatcherAttempted) return;
+                dispatcherAttempted = true;
+                Native.DispatcherQueueOptions options = new Native.DispatcherQueueOptions { dwSize = Marshal.SizeOf(typeof(Native.DispatcherQueueOptions)), threadType = 1, apartmentType = 2 };
+                object controller; int result = Native.CreateDispatcherQueueController(options, out controller);
+                if (result < 0 || controller == null) throw new InvalidOperationException("Windows Composition dispatcher unavailable.");
+                sharedDispatcherQueue = controller;
+            }
+        }
+        internal void CancelCue() { Finish(); }
+        void Finish()
+        {
+            if (finished) return; finished = true;
+            if (fallback != null) { fallback.Stop(); fallback.Dispose(); fallback = null; }
+            try { Hide(); } catch { }
+            Action done = completed; completed = null; if (done != null) done();
+            try { Dispose(); } catch { }
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (token != null) { token.Dispose(); token = null; }
+                if (root != null) { root.Dispose(); root = null; }
+                if (target != null) { Marshal.ReleaseComObject(target); target = null; }
+                if (compositor != null) { compositor.Dispose(); compositor = null; }
+            }
+            base.Dispose(disposing);
+        }
+    }
+#else
+    internal sealed class CompositionMotionOverlay : Form
+    {
+        readonly Action completed;
+        internal CompositionMotionOverlay(Rectangle source, Rectangle destination, Action onCompleted) { completed = onCompleted; ShowInTaskbar = false; }
+        internal void CancelCue() { if (!IsDisposed) Close(); }
+        protected override void OnShown(EventArgs e) { base.OnShown(e); if (completed != null) completed(); Close(); }
+    }
+#endif
 
     internal sealed class WindowMorphOverlay : Form
     {
@@ -844,6 +1212,13 @@ namespace DesktopFoldersDirect
         protected override void Dispose(bool disposing) { if (disposing) { timer.Dispose(); snapshot.Dispose(); } base.Dispose(disposing); }
     }
 
+    internal sealed class TileMotion
+    {
+        internal AppTile Tile;
+        internal Point From;
+        internal Point To;
+    }
+
     internal sealed class FolderPanel : Form
     {
         internal const string SourceGroupFormat = "DesktopFolders.SourceGroup.v1";
@@ -877,10 +1252,22 @@ namespace DesktopFoldersDirect
         Rectangle anchorBounds;
         Rectangle animationOrigin;
         WindowMorphOverlay activeMorph;
+        CompositionMotionOverlay activeCompositionCue;
         System.Windows.Forms.Timer releaseTopMost;
+        System.Windows.Forms.Timer reorderAnimation;
+        List<TileMotion> reorderMotions;
+        int reorderAnimationStarted;
+        bool reorderLayoutSuspended;
+        bool gridDragActive;
+        bool gridDragCommitted;
+        string gridDragSourcePath;
+        string gridPreviewTargetPath;
+        bool gridPreviewAfter;
 
         internal static void ShowOrActivate(string tilePath, Rectangle source, AppSettings currentSettings)
         {
+            Rectangle live;
+            if (ExplorerDesktop.TryGetIconBounds(tilePath, out live)) source = live;
             VirtualGroup requested = DataStore.LoadVirtualLayout().Groups.FirstOrDefault(g => !String.IsNullOrEmpty(g.TilePath) && g.TilePath.Equals(tilePath, StringComparison.OrdinalIgnoreCase));
             if (requested == null) return;
             lock (OpenPanelsLock)
@@ -889,7 +1276,7 @@ namespace DesktopFoldersDirect
                 if (OpenPanels.TryGetValue(requested.Id, out reference)) existing = reference.Target as FolderPanel;
                 if (existing != null && !existing.IsDisposed)
                 {
-                    existing.Promote(); return;
+                    existing.ReanchorForActivation(source); existing.Promote(); return;
                 }
                 FolderPanel panel = new FolderPanel(tilePath, source, currentSettings);
                 OpenPanels[requested.Id] = new WeakReference(panel); panel.Show();
@@ -905,7 +1292,11 @@ namespace DesktopFoldersDirect
             }
             foreach (FolderPanel panel in panels)
             {
-                DesktopItem tile = items.FirstOrDefault(item => item.IsGroup && panel.group != null && !String.IsNullOrEmpty(panel.group.TilePath) && item.Path.Equals(panel.group.TilePath, StringComparison.OrdinalIgnoreCase));
+                VirtualGroup g = panel.group;
+                if (g == null) continue;
+                string tilePath = g.TilePath;
+                if (String.IsNullOrEmpty(tilePath)) continue;
+                DesktopItem tile = items.FirstOrDefault(item => item.IsGroup && item.Path.Equals(tilePath, StringComparison.OrdinalIgnoreCase));
                 if (tile != null) panel.QueueAnchorUpdate(tile.Bounds);
             }
         }
@@ -915,8 +1306,10 @@ namespace DesktopFoldersDirect
             settings = currentSettings; layout = DataStore.LoadVirtualLayout();
             group = layout.Groups.FirstOrDefault(g => g.TilePath.Equals(tilePath, StringComparison.OrdinalIgnoreCase));
             if (group == null) throw new InvalidDataException("Không tìm thấy dữ liệu virtual group.");
+            Rectangle live;
+            if (ExplorerDesktop.TryGetIconBounds(tilePath, out live)) source = live;
             groupId = group.Id; anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5); Text = "Desktop Folders — " + group.Name;
-            FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Border; Padding = new Padding(2); Opacity = 1.0; AllowDrop = true; KeyPreview = true;
+            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Border; Padding = new Padding(1); Opacity = 1.0; AllowDrop = true; KeyPreview = true;
 #if TRACE_DRAG
             ShowInTaskbar = true;
 #endif
@@ -929,14 +1322,14 @@ namespace DesktopFoldersDirect
             Size = finalSize; Location = finalLocation;
             DataStore.LogDrag("PANEL anchor=" + source + " bounds=" + Bounds);
 
-            GradientPanel shell = new GradientPanel { Dock = DockStyle.Fill, Padding = new Padding(20, 12, 8, 12), CornerRadius = 22 };
+            GradientPanel shell = new GradientPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 9, 10), CornerRadius = CollectionTheme.RadiusWindow };
             Controls.Add(shell);
-            Panel header = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Color.Transparent };
+            Panel header = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Color.Transparent };
             shell.Controls.Add(header);
-            HeaderIconButton close = HeaderButton(HeaderIconKind.Close, 36); close.Dock = DockStyle.Right; close.Click += delegate { CloseWithMorph(); };
-            expandButton = HeaderButton(HeaderIconKind.Expand, 36); expandButton.Dock = DockStyle.Right; expandButton.Click += delegate { ToggleExpanded(); };
-            listButton = HeaderButton(HeaderIconKind.List, 36); listButton.Dock = DockStyle.Right; listButton.Click += delegate { gridMode = false; UpdateModeButtons(); RenderApps(); };
-            gridButton = HeaderButton(HeaderIconKind.Grid, 36); gridButton.Dock = DockStyle.Right; gridButton.Click += delegate { gridMode = true; UpdateModeButtons(); RenderApps(); };
+            HeaderIconButton close = HeaderButton(HeaderIconKind.Close, 32); close.Dock = DockStyle.Right; close.Click += delegate { CloseWithMorph(); };
+            expandButton = HeaderButton(HeaderIconKind.Expand, 32); expandButton.Dock = DockStyle.Right; expandButton.Click += delegate { ToggleExpanded(); };
+            listButton = HeaderButton(HeaderIconKind.List, 32); listButton.Dock = DockStyle.Right; listButton.Click += delegate { gridMode = false; UpdateModeButtons(); RenderApps(); };
+            gridButton = HeaderButton(HeaderIconKind.Grid, 32); gridButton.Dock = DockStyle.Right; gridButton.Click += delegate { gridMode = true; UpdateModeButtons(); RenderApps(); };
             close.AccessibleName = "Đóng collection"; expandButton.AccessibleName = "Phóng to collection"; listButton.AccessibleName = "Bố cục danh sách"; gridButton.AccessibleName = "Bố cục lưới";
             // Controls dock from the last added element toward the outside edge.
             // Visual order, left-to-right: grid, list, expand, close.
@@ -945,36 +1338,34 @@ namespace DesktopFoldersDirect
 
             Panel content = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
             shell.Controls.Add(content); content.BringToFront();
-            titleLabel = new Label { Text = group.Name, ForeColor = CollectionTheme.Text, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 1), Width = 190, Height = 42, Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft };
-            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Background, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 8), Width = 190 };
+            titleLabel = new Label { Text = group.Name, ForeColor = CollectionTheme.Text, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 0), Width = 190, Height = 54, Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = false };
+            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Background, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 12), Width = 190 };
             titleLabel.Click += delegate { BeginTitleEdit(); };
             titleEditor.Leave += delegate { CommitTitleEdit(); };
             titleEditor.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { CommitTitleEdit(); e.SuppressKeyPress = true; } else if (e.KeyCode == Keys.Escape) { EndTitleEdit(false); e.SuppressKeyPress = true; } };
             header.Controls.Add(titleLabel); header.Controls.Add(titleEditor); titleLabel.SendToBack(); titleEditor.SendToBack();
-            header.Resize += delegate { int titleWidth = Math.Max(70, header.ClientSize.Width - 152); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; };
+            header.Resize += delegate { int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; };
 
-            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 48, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            SearchGlyphControl searchIcon = new SearchGlyphControl { Dock = DockStyle.Left, Width = 44 };
-            HeaderIconButton clear = HeaderButton(HeaderIconKind.Close, 36); clear.Dock = DockStyle.Right; clear.BackColor = CollectionTheme.Control; clear.Click += delegate { search.Clear(); search.Focus(); };
-            clear.AccessibleName = "Xóa tìm kiếm";
-            tooltips.SetToolTip(clear, "Xóa tìm kiếm");
-            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 11), Location = new Point(44, 14), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 24, AccessibleName = "Tìm trong collection" };
-            searchHint = new Label { Text = "Tìm trong collection…", ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10.5f), AutoSize = true, Location = new Point(48, 15), Cursor = Cursors.IBeam };
+            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, BorderColor = CollectionTheme.Stroke, BorderThickness = 1, ShowSearchGlyph = true, GlyphColor = CollectionTheme.MutedText, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = "Tìm trong collection" };
+            searchHint = new Label { Text = "Tìm trong collection…", ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
             searchHint.Click += delegate { search.Focus(); };
-            searchContainer.Controls.Add(search); searchContainer.Controls.Add(searchIcon); searchContainer.Controls.Add(clear); searchContainer.Controls.Add(searchHint); searchHint.BringToFront();
+            search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.Focus; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.Focus; searchContainer.Invalidate(); };
+            search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.Stroke; searchContainer.BorderThickness = 1; searchContainer.GlyphColor = CollectionTheme.MutedText; searchContainer.Invalidate(); };
+            searchContainer.Controls.Add(search); searchContainer.Controls.Add(searchHint); searchHint.BringToFront();
             content.Controls.Add(searchContainer);
 
-            appsViewport = new Panel { Location = new Point(0, 64), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+            appsViewport = new Panel { Location = new Point(0, 54), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
             apps = new FlowLayoutPanel { Location = Point.Empty, AutoScroll = false, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, BackColor = Color.Transparent, Padding = new Padding(5, 0, 0, 0), AllowDrop = true };
             themedScroll = new DarkScrollBar(appsViewport, apps) { Width = 6, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right };
             appsViewport.Controls.Add(apps); content.Controls.Add(appsViewport);
             content.Controls.Add(themedScroll); themedScroll.BringToFront();
             search.TextChanged += delegate { searchHint.Visible = search.TextLength == 0; RenderApps(); };
             Action layoutContent = delegate {
-                int titleWidth = Math.Max(70, header.ClientSize.Width - 152); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; searchContainer.Width = Math.Max(100, content.ClientSize.Width - 8); search.Width = Math.Max(80, searchContainer.ClientSize.Width - 88);
-                int contentHeight = Math.Max(100, content.ClientSize.Height - 64); int scrollX = Math.Max(100, content.ClientSize.Width - 12);
-                appsViewport.Size = new Size(Math.Max(100, scrollX - 16), contentHeight); apps.Width = appsViewport.ClientSize.Width;
-                themedScroll.Location = new Point(scrollX, 64); themedScroll.Height = contentHeight;
+                int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; searchContainer.Width = Math.Max(100, content.ClientSize.Width - 7); search.Width = Math.Max(80, searchContainer.ClientSize.Width - 57);
+                int contentHeight = Math.Max(100, content.ClientSize.Height - 54); int scrollX = Math.Max(100, content.ClientSize.Width - 8);
+                appsViewport.Size = new Size(Math.Max(100, scrollX - 8), contentHeight); apps.Width = appsViewport.ClientSize.Width;
+                themedScroll.Location = new Point(scrollX, 54); themedScroll.Height = contentHeight;
             };
             content.Resize += delegate { layoutContent(); };
             MouseEventHandler clearTextFocus = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ClearTextFocus(); };
@@ -982,14 +1373,13 @@ namespace DesktopFoldersDirect
             DragEnter += OnDragEnter; DragDrop += OnDragDrop; appsViewport.DragEnter += OnDragEnter; appsViewport.DragDrop += OnDragDrop; apps.DragEnter += OnDragEnter; apps.DragDrop += OnDragDrop;
             LayoutChanged += OnSharedLayoutChanged; DesktopPointerDown += OnDesktopPointerDown;
             FormClosed += delegate {
-                CancelActiveMorph();
+                CancelActiveMorph(); CancelCompositionCue(); CancelGridDragPreview(false);
                 LayoutChanged -= OnSharedLayoutChanged; DesktopPointerDown -= OnDesktopPointerDown;
                 lock (OpenPanelsLock) { WeakReference reference; if (OpenPanels.TryGetValue(groupId, out reference) && Object.ReferenceEquals(reference.Target, this)) OpenPanels.Remove(groupId); }
                 DataStore.LogDrag("PANEL closed=" + groupId);
             };
             Shown += delegate {
                 DataStore.LogDrag("PANEL shown=" + group.Name); UpdateModeButtons(); layoutContent(); RenderApps(); Opacity = 1.0; Promote();
-                if (!settings.ReduceMotion) BeginInvoke(new Action(StartOpeningMorph));
             };
             Deactivate += delegate { TopMost = false; DataStore.LogDrag("PANEL deactivate=" + groupId); };
             KeyDown += delegate(object sender, KeyEventArgs e) {
@@ -1021,7 +1411,7 @@ namespace DesktopFoldersDirect
             Point location = FindOpenLocation(CalculateAnchoredLocation(anchorBounds, target, work), target, work, this);
             Rectangle previous = Bounds; finalSize = target; finalLocation = location; Bounds = new Rectangle(location, target); Opacity = 1.0;
             expandButton.IconKind = expanded ? HeaderIconKind.Collapse : HeaderIconKind.Expand; expandButton.AccessibleName = expanded ? "Thu nhỏ collection" : "Phóng to collection"; tooltips.SetToolTip(expandButton, expanded ? "Thu nhỏ collection" : "Phóng to collection"); RenderApps();
-            Promote(); if (!settings.ReduceMotion) StartMorph(previous, Bounds);
+            Promote(); if (!settings.ReduceMotion) StartCompositionCue(previous, Bounds);
         }
 
         Bitmap CaptureSnapshot()
@@ -1029,9 +1419,16 @@ namespace DesktopFoldersDirect
             Bitmap image = new Bitmap(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
             DrawToBitmap(image, ClientRectangle); return image;
         }
-        void StartOpeningMorph()
+        void StartCompositionCue(Rectangle from, Rectangle to)
         {
-            if (IsDisposed) return; StartMorph(animationOrigin, Bounds);
+            if (IsDisposed || settings.ReduceMotion || from == to) return;
+            CancelCompositionCue(); CompositionMotionOverlay cue = null;
+            try
+            {
+                cue = new CompositionMotionOverlay(from, to, delegate { if (Object.ReferenceEquals(activeCompositionCue, cue)) activeCompositionCue = null; });
+                activeCompositionCue = cue; cue.Show();
+            }
+            catch { if (cue != null && !cue.IsDisposed) cue.Dispose(); activeCompositionCue = null; }
         }
         void StartMorph(Rectangle from, Rectangle to)
         {
@@ -1051,9 +1448,14 @@ namespace DesktopFoldersDirect
         {
             WindowMorphOverlay overlay = activeMorph; activeMorph = null; if (overlay != null && !overlay.IsDisposed) overlay.CancelMorph();
         }
+        void CancelCompositionCue()
+        {
+            CompositionMotionOverlay cue = activeCompositionCue; activeCompositionCue = null; if (cue != null && !cue.IsDisposed) cue.CancelCue();
+        }
         void CloseWithMorph()
         {
             if (IsDisposed) return;
+            CancelCompositionCue();
             if (settings.ReduceMotion) { Close(); return; }
             Bitmap image = null; Rectangle from = Bounds, to = animationOrigin;
             try
@@ -1061,6 +1463,16 @@ namespace DesktopFoldersDirect
                 image = CaptureSnapshot(); CancelActiveMorph(); Close(); WindowMorphOverlay overlay = new WindowMorphOverlay(image, from, to, 90, null); overlay.Show();
             }
             catch { if (image != null) image.Dispose(); if (!IsDisposed) Close(); }
+        }
+        void ReanchorForActivation(Rectangle source)
+        {
+            if (IsDisposed || source.Width <= 0 || source.Height <= 0) return;
+            CancelActiveMorph(); anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5);
+            Rectangle work = Screen.FromRectangle(source).WorkingArea;
+            Point location = FindOpenLocation(CalculateAnchoredLocation(source, finalSize, work), finalSize, work, this);
+            // The popup is always committed to its current tile anchor before the
+            // first visible frame. Never animate a previously cached form position.
+            Bounds = new Rectangle(location, finalSize); finalLocation = location;
         }
         static Point FindOpenLocation(Point desired, Size size, Rectangle work, FolderPanel ignored = null)
         {
@@ -1091,7 +1503,7 @@ namespace DesktopFoldersDirect
                 if (IsDisposed) return; anchorBounds = updated; animationOrigin = Rectangle.Inflate(updated, -5, -5);
                 Rectangle work = Screen.FromRectangle(updated).WorkingArea; Point location = FindOpenLocation(CalculateAnchoredLocation(updated, finalSize, work), finalSize, work, this);
                 if (Math.Abs(location.X - Left) <= 2 && Math.Abs(location.Y - Top) <= 2) return;
-                Rectangle previous = Bounds; Bounds = new Rectangle(location, finalSize); if (!settings.ReduceMotion) StartMorph(previous, Bounds);
+                Bounds = new Rectangle(location, finalSize); finalLocation = location;
             }));
         }
         static Point CalculateAnchoredLocation(Rectangle anchor, Size size, Rectangle work)
@@ -1115,18 +1527,25 @@ namespace DesktopFoldersDirect
         void RenderApps()
         {
             if (apps == null || group == null) return;
-            themedScroll.SetValue(0); apps.SuspendLayout(); apps.Controls.Clear(); apps.Top = 0; apps.Height = 10000; string query = search == null ? "" : search.Text.Trim().ToLowerInvariant();
+            CancelReorderAnimation(); themedScroll.SetValue(0); apps.SuspendLayout(); apps.Controls.Clear(); apps.Top = 0; apps.Height = 10000; string query = search == null ? "" : search.Text.Trim().ToLowerInvariant();
             VirtualMember[] members = group.Members.Where(m => File.Exists(m.Path) && Path.GetFileNameWithoutExtension(m.Path).ToLowerInvariant().Contains(query)).OrderByDescending(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)).ToArray();
             bool compactGrid = gridMode && apps.ClientSize.Width < 600;
             int usableWidth = Math.Max(260, apps.ClientSize.Width);
-            int width = gridMode ? (compactGrid ? Math.Min(96, Math.Max(76, (usableWidth - 30) / 3)) : Math.Max(140, (usableWidth - 30) / 3)) : Math.Max(250, usableWidth - 10);
-            int rowWidth = gridMode ? (width + 10) * 3 : width;
+            int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 24) / 3)) : Math.Max(250, usableWidth - 4);
+            int rowWidth = gridMode ? (width + 8) * 3 : width;
             apps.Padding = new Padding(Math.Max(0, (usableWidth - rowWidth) / 2), 0, 0, 0);
             if (members.Length == 0) apps.Controls.Add(new Label { Text = "Không tìm thấy ứng dụng phù hợp.", ForeColor = CollectionTheme.MutedText, Font = new Font("Segoe UI", 11), AutoSize = true, Margin = new Padding(16) });
+            bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
             foreach (VirtualMember member in members)
             {
                 string path = member.Path; bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase);
-                AppTile tile = new AppTile(path, pinned, gridMode, width) { Margin = gridMode ? new Padding(5, 6, 5, 6) : new Padding(0, 0, 0, 12) };
+                if (!activePinnedSection.HasValue || activePinnedSection.Value != pinned)
+                {
+                    if (apps.Controls.Count > 0) apps.SetFlowBreak(apps.Controls[apps.Controls.Count - 1], true);
+                    SectionHeaderControl section = new SectionHeaderControl(pinned ? "Đã ghim" : "Tất cả ứng dụng", pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
+                    apps.Controls.Add(section); apps.SetFlowBreak(section, true); activePinnedSection = pinned;
+                }
+                AppTile tile = new AppTile(path, pinned, gridMode, width, settings.ReduceMotion) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
                 tooltips.SetToolTip(tile, Path.GetFileNameWithoutExtension(path));
                 tile.MouseWheel += delegate(object sender, MouseEventArgs e) { themedScroll.ScrollBy(-(e.Delta / 120) * 70); HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; };
                 Point childDragStart = Point.Empty; bool childDidDrag = false;
@@ -1135,19 +1554,140 @@ namespace DesktopFoldersDirect
                     if (e.Button != MouseButtons.Left || childDidDrag) return;
                     if (Math.Abs(e.X - childDragStart.X) < SystemInformation.DragSize.Width / 2 && Math.Abs(e.Y - childDragStart.Y) < SystemInformation.DragSize.Height / 2) return;
                     childDidDrag = true; DataObject data = new DataObject(); data.SetData(SourceGroupFormat, groupId); data.SetData(MemberPathFormat, path);
+                    BeginGridDrag(path); tile.SetDragVisual(true, false);
                     DragDropEffects effect = tile.DoDragDrop(data, DragDropEffects.Link | DragDropEffects.Move);
-                    if (effect != DragDropEffects.Move && ExplorerDesktop.IsPointOnDesktopSurface(Cursor.Position)) BeginInvoke(new Action(delegate { MoveOut(path); }));
+                    bool committed = gridDragCommitted; bool droppedOnDesktop = effect != DragDropEffects.Move && ExplorerDesktop.IsPointOnDesktopSurface(Cursor.Position);
+                    if (!committed) CancelGridDragPreview(true); else EndGridDrag();
+                    AppTile currentTile = apps.Controls.OfType<AppTile>().FirstOrDefault(item => item.ItemPath.Equals(path, StringComparison.OrdinalIgnoreCase));
+                    if (currentTile != null && !currentTile.IsDisposed) currentTile.SetDragVisual(false, false);
+                    if (droppedOnDesktop) BeginInvoke(new Action(delegate { AppTile visibleTile = apps.Controls.OfType<AppTile>().FirstOrDefault(item => item.ItemPath.Equals(path, StringComparison.OrdinalIgnoreCase)); AnimateMoveOut(visibleTile, path); }));
                 };
                 tile.Click += delegate { if (childDidDrag) { childDidDrag = false; return; } try { Process.Start(path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); } };
-                ContextMenuStrip menu = new ContextMenuStrip(); menu.Items.Add("Mở", null, delegate { try { Process.Start(path); } catch { } });
-                menu.Items.Add(pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", null, delegate { TogglePin(path); });
-                menu.Items.Add("Đưa ra Desktop", null, delegate { MoveOut(path); });
-                tile.ContextMenuStrip = menu; apps.Controls.Add(tile);
+                tile.DragEnter += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
+                tile.DragOver += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
+                tile.DragLeave += delegate { tile.SetDragVisual(false, false); };
+                tile.DragDrop += delegate(object sender, DragEventArgs e) { HandleTileDrop(tile, path, pinned, e); };
+                ContextMenuStrip shellTrigger = new ContextMenuStrip();
+                shellTrigger.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e) { e.Cancel = true; BeginInvoke(new Action(delegate { if (IsDisposed) return; DataStore.LogDrag("SHELL_MENU request=" + path); ShellContextMenu.Show(this, path, pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }); })); };
+                tile.ContextMenuStrip = shellTrigger;
+                apps.Controls.Add(tile);
             }
             apps.ResumeLayout(); apps.PerformLayout(); int contentBottom = 0;
             foreach (Control control in apps.Controls) contentBottom = Math.Max(contentBottom, control.Bottom + control.Margin.Bottom);
             apps.Height = Math.Max(appsViewport.ClientSize.Height, contentBottom + 4);
             themedScroll.SyncFromTarget();
+        }
+
+        void HandleTileDragEnter(AppTile targetTile, string targetPath, bool targetPinned, DragEventArgs e)
+        {
+            string sourceGroup = e.Data.GetData(SourceGroupFormat) as string; string sourcePath = e.Data.GetData(MemberPathFormat) as string;
+            if (sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath))
+            {
+                bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase);
+                e.Effect = sourcePinned == targetPinned ? DragDropEffects.Move : DragDropEffects.None;
+                if (e.Effect == DragDropEffects.Move && !sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    Point local = targetTile.PointToClient(new Point(e.X, e.Y)); bool insertAfter = gridMode ? local.X >= targetTile.Width / 2 : local.Y >= targetTile.Height / 2;
+                    PreviewGridReorder(sourcePath, targetPath, insertAfter);
+                }
+                targetTile.SetDragVisual(false, e.Effect == DragDropEffects.Move); return;
+            }
+            targetTile.SetDragVisual(false, false); OnDragEnter(targetTile, e);
+        }
+        void HandleTileDrop(AppTile targetTile, string targetPath, bool targetPinned, DragEventArgs e)
+        {
+            targetTile.SetDragVisual(false, false); string sourceGroup = e.Data.GetData(SourceGroupFormat) as string; string sourcePath = e.Data.GetData(MemberPathFormat) as string;
+            if (sourceGroup == groupId && !String.IsNullOrEmpty(sourcePath))
+            {
+                bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase);
+                if (sourcePinned == targetPinned)
+                {
+                    if (!sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)) { Point local = targetTile.PointToClient(new Point(e.X, e.Y)); PreviewGridReorder(sourcePath, targetPath, gridMode ? local.X >= targetTile.Width / 2 : local.Y >= targetTile.Height / 2); }
+                    DataStore.LogDrag("REORDER commit=" + Path.GetFileName(sourcePath)); CommitGridReorder(); e.Effect = DragDropEffects.Move;
+                }
+                else e.Effect = DragDropEffects.None;
+                return;
+            }
+            OnDragDrop(targetTile, e);
+        }
+        void BeginGridDrag(string sourcePath)
+        {
+            CancelReorderAnimation(); gridDragActive = true; gridDragCommitted = false; gridDragSourcePath = sourcePath; gridPreviewTargetPath = null; gridPreviewAfter = false;
+        }
+        void PreviewGridReorder(string sourcePath, string targetPath, bool insertAfter)
+        {
+            if (!gridDragActive || String.IsNullOrEmpty(sourcePath) || sourcePath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)) return;
+            if (String.Equals(gridPreviewTargetPath, targetPath, StringComparison.OrdinalIgnoreCase) && gridPreviewAfter == insertAfter) return;
+            CancelReorderAnimation(); AppTile source = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(sourcePath, StringComparison.OrdinalIgnoreCase)); AppTile target = apps.Controls.OfType<AppTile>().FirstOrDefault(tile => tile.ItemPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
+            if (source == null || target == null) return;
+            bool sourcePinned = group.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase), targetPinned = group.Pinned.Contains(targetPath, StringComparer.OrdinalIgnoreCase); if (sourcePinned != targetPinned) return;
+            List<AppTile> sectionTiles = apps.Controls.OfType<AppTile>().Where(tile => group.Pinned.Contains(tile.ItemPath, StringComparer.OrdinalIgnoreCase) == sourcePinned).ToList();
+            Dictionary<string, Point> previous = sectionTiles.ToDictionary(tile => tile.ItemPath, tile => tile.Location, StringComparer.OrdinalIgnoreCase);
+            sectionTiles.Remove(source); int targetIndex = sectionTiles.FindIndex(tile => tile.ItemPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase)); if (targetIndex < 0) return; if (insertAfter) targetIndex++; sectionTiles.Insert(Math.Max(0, Math.Min(sectionTiles.Count, targetIndex)), source);
+            int firstControlIndex = sectionTiles.Min(tile => apps.Controls.GetChildIndex(tile)); apps.SuspendLayout();
+            for (int index = 0; index < sectionTiles.Count; index++) apps.Controls.SetChildIndex(sectionTiles[index], firstControlIndex + index);
+            apps.ResumeLayout(true); apps.PerformLayout(); gridPreviewTargetPath = targetPath; gridPreviewAfter = insertAfter; StartReorderAnimation(previous);
+        }
+        void CommitGridReorder()
+        {
+            if (!gridDragActive) return; CancelReorderAnimation(); layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) { EndGridDrag(); return; }
+            List<string> visual = apps.Controls.OfType<AppTile>().Select(tile => tile.ItemPath).ToList(); ApplyVisualSubset(group.Members, visual.Where(path => group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList()); ApplyVisualSubset(group.Members, visual.Where(path => !group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList());
+            DataStore.SaveVirtualLayout(layout); try { GroupTileFactory.CreateOrUpdate(group); } catch { } gridDragCommitted = true; gridDragActive = false; gridPreviewTargetPath = null;
+        }
+        static void ApplyVisualSubset(List<VirtualMember> members, List<string> visualOrder)
+        {
+            if (visualOrder == null || visualOrder.Count < 2) return; Dictionary<string, VirtualMember> byPath = members.ToDictionary(member => member.Path, StringComparer.OrdinalIgnoreCase); HashSet<string> visible = new HashSet<string>(visualOrder, StringComparer.OrdinalIgnoreCase); int next = 0;
+            for (int index = 0; index < members.Count && next < visualOrder.Count; index++) if (visible.Contains(members[index].Path)) members[index] = byPath[visualOrder[next++]];
+        }
+        void CancelGridDragPreview(bool restoreLayout)
+        {
+            CancelReorderAnimation(); bool wasActive = gridDragActive; EndGridDrag();
+            if (restoreLayout && wasActive && !IsDisposed) { layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group != null) RenderApps(); }
+        }
+        void EndGridDrag()
+        {
+            gridDragActive = false; gridDragCommitted = false; gridDragSourcePath = null; gridPreviewTargetPath = null; gridPreviewAfter = false;
+        }
+        void StartReorderAnimation(Dictionary<string, Point> previous)
+        {
+            if (settings.ReduceMotion || previous == null || previous.Count == 0) return;
+            List<TileMotion> motions = new List<TileMotion>();
+            foreach (AppTile tile in apps.Controls.OfType<AppTile>())
+            {
+                Point from; if (!previous.TryGetValue(tile.ItemPath, out from) || from == tile.Location) continue;
+                motions.Add(new TileMotion { Tile = tile, From = from, To = tile.Location });
+            }
+            if (motions.Count == 0) return;
+            apps.SuspendLayout(); reorderLayoutSuspended = true; reorderMotions = motions;
+            foreach (TileMotion motion in motions) motion.Tile.Location = motion.From;
+            if (reorderAnimation == null) { reorderAnimation = new System.Windows.Forms.Timer { Interval = 15 }; reorderAnimation.Tick += delegate { AnimateReorderFrame(); }; }
+            reorderAnimationStarted = Environment.TickCount; reorderAnimation.Start();
+        }
+        void AnimateReorderFrame()
+        {
+            if (reorderMotions == null || reorderMotions.Count == 0) { CancelReorderAnimation(); return; }
+            double progress = Math.Min(1.0, unchecked(Environment.TickCount - reorderAnimationStarted) / 155.0); double eased = 1.0 - Math.Pow(1.0 - progress, 3.0);
+            foreach (TileMotion motion in reorderMotions) if (!motion.Tile.IsDisposed) motion.Tile.Location = new Point(motion.From.X + (int)Math.Round((motion.To.X - motion.From.X) * eased), motion.From.Y + (int)Math.Round((motion.To.Y - motion.From.Y) * eased));
+            if (progress >= 1.0) CancelReorderAnimation();
+        }
+        void CancelReorderAnimation()
+        {
+            if (reorderAnimation != null) reorderAnimation.Stop();
+            if (reorderMotions != null) foreach (TileMotion motion in reorderMotions) if (!motion.Tile.IsDisposed) motion.Tile.Location = motion.To;
+            reorderMotions = null;
+            if (reorderLayoutSuspended && apps != null && !apps.IsDisposed) { reorderLayoutSuspended = false; apps.ResumeLayout(false); apps.PerformLayout(); }
+        }
+        void AnimateMoveOut(AppTile tile, string path)
+        {
+            if (settings.ReduceMotion || tile == null || tile.IsDisposed) { MoveOut(path); return; }
+            Bitmap image = null;
+            try
+            {
+                image = new Bitmap(Math.Max(1, tile.Width), Math.Max(1, tile.Height)); tile.DrawToBitmap(image, tile.ClientRectangle);
+                Rectangle from = tile.RectangleToScreen(tile.ClientRectangle); Point pointer = Cursor.Position; Rectangle to = new Rectangle(pointer.X - 28, pointer.Y - 28, 56, 56);
+                WindowMorphOverlay overlay = new WindowMorphOverlay(image, from, to, 125, delegate { MoveOut(path); }); image = null; overlay.Show();
+            }
+            catch { if (image != null) image.Dispose(); MoveOut(path); }
         }
 
         void ReloadGroup()
@@ -1200,7 +1740,7 @@ namespace DesktopFoldersDirect
         {
             string sourceGroup = e.Data.GetData(SourceGroupFormat) as string;
             string memberPath = e.Data.GetData(MemberPathFormat) as string;
-            e.Effect = !String.IsNullOrEmpty(sourceGroup) && !String.IsNullOrEmpty(memberPath) && sourceGroup != groupId ? DragDropEffects.Move : (e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Link : DragDropEffects.None);
+            e.Effect = !String.IsNullOrEmpty(sourceGroup) && !String.IsNullOrEmpty(memberPath) ? DragDropEffects.Move : (e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Link : DragDropEffects.None);
         }
         void OnDragDrop(object sender, DragEventArgs e)
         {
@@ -1209,6 +1749,7 @@ namespace DesktopFoldersDirect
             string[] paths = !String.IsNullOrEmpty(internalPath) ? new string[] { internalPath } : e.Data.GetData(DataFormats.FileDrop) as string[]; if (paths == null || paths.Length == 0) return;
             try
             {
+                if (sourceGroup == groupId && !String.IsNullOrEmpty(internalPath)) { CommitGridReorder(); e.Effect = DragDropEffects.Move; return; }
                 if (!String.IsNullOrEmpty(sourceGroup) && sourceGroup != groupId && TransferMember(sourceGroup, paths[0])) { e.Effect = DragDropEffects.Move; return; }
                 foreach (string path in paths) AddMember(path); e.Effect = DragDropEffects.Link; NotifyLayoutChanged();
             }
@@ -1245,7 +1786,7 @@ namespace DesktopFoldersDirect
             Rectangle rounded = new Rectangle(0, 0, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 1));
             using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rounded, CollectionTheme.RadiusWindow)) { Region old = Region; Region = new Region(path); if (old != null) old.Dispose(); }
         }
-        protected override void Dispose(bool disposing) { if (disposing) { if (releaseTopMost != null) releaseTopMost.Dispose(); if (tooltips != null) tooltips.Dispose(); } base.Dispose(disposing); }
+        protected override void Dispose(bool disposing) { if (disposing) { if (releaseTopMost != null) releaseTopMost.Dispose(); if (reorderAnimation != null) reorderAnimation.Dispose(); if (tooltips != null) tooltips.Dispose(); } base.Dispose(disposing); }
     }
 
     internal sealed class GradientPanel : Panel
@@ -1264,6 +1805,8 @@ namespace DesktopFoldersDirect
         {
             Rectangle area = ClientRectangle; if (area.Width <= 0 || area.Height <= 0) return;
             using (Brush background = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(background, area);
+            Rectangle glow = new Rectangle(-area.Width / 4, -area.Height / 2, area.Width + area.Width / 2, Math.Max(180, area.Height));
+            using (System.Drawing.Drawing2D.LinearGradientBrush ambient = new System.Drawing.Drawing2D.LinearGradientBrush(glow, Color.FromArgb(29, CollectionTheme.Focus), Color.FromArgb(0, CollectionTheme.Focus), 90f)) e.Graphics.FillEllipse(ambient, glow);
         }
     }
 
@@ -1305,8 +1848,8 @@ namespace DesktopFoldersDirect
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (Brush track = new SolidBrush(CollectionTheme.Control)) e.Graphics.FillRoundedRectangle(track, new Rectangle(1, 0, Math.Max(4, Width - 2), Height), Math.Max(2, Width / 2));
-            using (Brush thumb = new SolidBrush(hot || dragging ? CollectionTheme.Focus : CollectionTheme.MutedText)) e.Graphics.FillRoundedRectangle(thumb, ThumbRectangle(), Math.Max(2, Width / 2 - 1));
+            Color thumbColor = hot || dragging ? Color.FromArgb(180, CollectionTheme.Focus) : Color.FromArgb(68, 255, 255, 255);
+            using (Brush thumb = new SolidBrush(thumbColor)) e.Graphics.FillRoundedRectangle(thumb, ThumbRectangle(), Math.Max(2, Width / 2 - 1));
         }
         protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; if (!dragging) Invalidate(); base.OnMouseLeave(e); }
@@ -1330,13 +1873,348 @@ namespace DesktopFoldersDirect
     internal sealed class RoundedPanel : Panel
     {
         internal int Radius { get; set; }
-        internal RoundedPanel() { Radius = 16; DoubleBuffered = true; Resize += delegate { UpdateRoundedRegion(); }; }
+        internal Color BorderColor { get; set; }
+        internal int BorderThickness { get; set; }
+        internal bool ShowSearchGlyph { get; set; }
+        internal Color GlyphColor { get; set; }
+        internal RoundedPanel() { Radius = 16; BorderColor = Color.Transparent; BorderThickness = 0; GlyphColor = CollectionTheme.MutedText; DoubleBuffered = true; Resize += delegate { UpdateRoundedRegion(); }; }
         void UpdateRoundedRegion()
         {
             if (ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0) return;
-            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(ClientRectangle, Radius))
+            Rectangle rounded = new Rectangle(0, 0, Math.Max(1, ClientSize.Width - 1), Math.Max(1, ClientSize.Height - 1));
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rounded, Radius))
             {
                 Region old = Region; Region = new Region(path); if (old != null) old.Dispose();
+            }
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e); if (ClientSize.Width <= 1 || ClientSize.Height <= 1) return;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            if (BorderThickness > 0 && BorderColor.A > 0)
+            {
+                int inset = Math.Max(1, BorderThickness);
+                Rectangle border = new Rectangle(inset, inset, Math.Max(1, ClientSize.Width - inset * 2 - 1), Math.Max(1, ClientSize.Height - inset * 2 - 1));
+                using (Pen pen = new Pen(BorderColor, BorderThickness)) e.Graphics.DrawRoundedRectangle(pen, border, Math.Max(3, Radius - inset));
+            }
+            if (ShowSearchGlyph)
+            {
+                float cx = 21f, cy = ClientSize.Height / 2f - 1f;
+                using (Pen pen = new Pen(GlyphColor, 1.7f))
+                {
+                    pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                    e.Graphics.DrawEllipse(pen, cx - 6, cy - 6, 12, 12); e.Graphics.DrawLine(pen, cx + 4, cy + 4, cx + 9, cy + 9);
+                }
+            }
+        }
+    }
+
+    internal sealed class ModernToggleSwitch : Control
+    {
+        bool isChecked;
+        bool hot;
+
+        internal event EventHandler CheckedChanged;
+
+        internal bool Checked
+        {
+            get { return isChecked; }
+            set
+            {
+                if (isChecked != value)
+                {
+                    isChecked = value;
+                    Invalidate();
+                    var handler = CheckedChanged;
+                    if (handler != null) handler(this, EventArgs.Empty);
+                }
+            }
+        }
+
+        internal ModernToggleSwitch()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.SupportsTransparentBackColor, true);
+            Size = new Size(46, 24);
+            Cursor = Cursors.Hand;
+            BackColor = Color.FromArgb(24, 32, 47);
+            TabStop = true;
+            AccessibleRole = AccessibleRole.CheckButton;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Focus();
+                Checked = !Checked;
+            }
+            base.OnMouseDown(e);
+        }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            {
+                Checked = !Checked;
+                e.Handled = true;
+            }
+            base.OnKeyDown(e);
+        }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Color bg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : BackColor;
+            using (Brush bgBrush = new SolidBrush(bg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
+
+            Rectangle track = new Rectangle(1, 2, Width - 3, Height - 5);
+            Color trackColor = isChecked
+                ? (hot ? Color.FromArgb(59, 130, 246) : Color.FromArgb(37, 99, 235))
+                : (hot ? Color.FromArgb(71, 85, 105) : Color.FromArgb(51, 65, 85));
+
+            using (Brush fill = new SolidBrush(trackColor))
+                e.Graphics.FillRoundedRectangle(fill, track, track.Height / 2);
+
+            if (Focused)
+            {
+                using (Pen focusPen = new Pen(CollectionTheme.Focus, 1.5f))
+                    e.Graphics.DrawRoundedRectangle(focusPen, track, track.Height / 2);
+            }
+
+            int thumbSize = track.Height - 4;
+            int thumbX = isChecked ? track.Right - thumbSize - 2 : track.Left + 2;
+            int thumbY = track.Top + 2;
+            Rectangle thumb = new Rectangle(thumbX, thumbY, thumbSize, thumbSize);
+
+            using (Brush thumbFill = new SolidBrush(Color.White))
+                e.Graphics.FillEllipse(thumbFill, thumb);
+        }
+    }
+
+    internal sealed class ModernSlider : Control
+    {
+        int min = 120;
+        int max = 800;
+        int step = 20;
+        int val = 280;
+        bool dragging;
+        bool hot;
+
+        internal event EventHandler ValueChanged;
+
+        internal int Minimum { get { return min; } set { min = value; Invalidate(); } }
+        internal int Maximum { get { return max; } set { max = value; Invalidate(); } }
+        internal int Step { get { return step; } set { step = Math.Max(1, value); } }
+
+        internal int Value
+        {
+            get { return val; }
+            set
+            {
+                int clamped = Math.Max(min, Math.Min(max, value));
+                clamped = min + (int)Math.Round((clamped - min) / (double)step) * step;
+                if (val != clamped)
+                {
+                    val = clamped;
+                    Invalidate();
+                    var handler = ValueChanged;
+                    if (handler != null) handler(this, EventArgs.Empty);
+                }
+            }
+        }
+
+        internal ModernSlider()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.SupportsTransparentBackColor, true);
+            Size = new Size(200, 26);
+            Cursor = Cursors.Hand;
+            BackColor = Color.FromArgb(24, 32, 47);
+            TabStop = true;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; if (!dragging) Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Focus();
+                dragging = true;
+                Capture = true;
+                UpdateFromPointer(e.X);
+            }
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (dragging) UpdateFromPointer(e.X);
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            dragging = false;
+            Capture = false;
+            Invalidate();
+            base.OnMouseUp(e);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Down) { Value -= step; e.Handled = true; }
+            else if (e.KeyCode == Keys.Right || e.KeyCode == Keys.Up) { Value += step; e.Handled = true; }
+            base.OnKeyDown(e);
+        }
+
+        void UpdateFromPointer(int pointerX)
+        {
+            int pad = 10;
+            int travel = Math.Max(1, Width - pad * 2);
+            double fraction = Math.Max(0.0, Math.Min(1.0, (pointerX - pad) / (double)travel));
+            Value = min + (int)Math.Round(fraction * (max - min));
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Color bg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : BackColor;
+            using (Brush bgBrush = new SolidBrush(bg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
+
+            int pad = 10;
+            int trackY = Height / 2 - 3;
+            int trackHeight = 6;
+            int trackWidth = Math.Max(1, Width - pad * 2);
+
+            Rectangle trackBg = new Rectangle(pad, trackY, trackWidth, trackHeight);
+            using (Brush bgFill = new SolidBrush(Color.FromArgb(51, 65, 85)))
+                e.Graphics.FillRoundedRectangle(bgFill, trackBg, 3);
+
+            double frac = (val - min) / (double)(max - min);
+            int thumbX = pad + (int)Math.Round(frac * trackWidth);
+
+            if (thumbX > pad)
+            {
+                Rectangle activeTrack = new Rectangle(pad, trackY, thumbX - pad, trackHeight);
+                using (Brush activeFill = new SolidBrush(Color.FromArgb(59, 130, 246)))
+                    e.Graphics.FillRoundedRectangle(activeFill, activeTrack, 3);
+            }
+
+            int thumbSize = 16;
+            Rectangle thumb = new Rectangle(thumbX - thumbSize / 2, Height / 2 - thumbSize / 2, thumbSize, thumbSize);
+
+            if (hot || dragging || Focused)
+            {
+                Rectangle glow = Rectangle.Inflate(thumb, 3, 3);
+                using (Brush glowBrush = new SolidBrush(Color.FromArgb(50, 59, 130, 246)))
+                    e.Graphics.FillEllipse(glowBrush, glow);
+            }
+
+            using (Brush thumbBrush = new SolidBrush(Color.White))
+                e.Graphics.FillEllipse(thumbBrush, thumb);
+
+            using (Pen thumbPen = new Pen(Color.FromArgb(59, 130, 246), 2f))
+                e.Graphics.DrawEllipse(thumbPen, thumb);
+        }
+    }
+
+    internal sealed class ModernCard : Panel
+    {
+        internal int Radius { get; set; }
+        internal Color CardColor { get; set; }
+        internal Color BorderColor { get; set; }
+
+        internal ModernCard()
+        {
+            Radius = 14;
+            CardColor = Color.FromArgb(24, 32, 47);
+            BorderColor = Color.FromArgb(51, 65, 85);
+            DoubleBuffered = true;
+            BackColor = CardColor;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Color parentBg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : CollectionTheme.Background;
+            using (Brush bgBrush = new SolidBrush(parentBg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
+
+            Rectangle rect = new Rectangle(1, 1, Width - 3, Height - 3);
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rect, Radius))
+            {
+                using (Brush brush = new SolidBrush(CardColor))
+                    e.Graphics.FillPath(brush, path);
+                using (Pen pen = new Pen(BorderColor, 1f))
+                    e.Graphics.DrawPath(pen, path);
+            }
+            base.OnPaint(e);
+        }
+    }
+
+    internal sealed class ModernButton : Button
+    {
+        bool isPrimary;
+        bool hot;
+
+        internal bool IsPrimary
+        {
+            get { return isPrimary; }
+            set { isPrimary = value; Invalidate(); }
+        }
+
+        internal ModernButton(string text, bool primary = false)
+        {
+            Text = text;
+            isPrimary = primary;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            Cursor = Cursors.Hand;
+            BackColor = primary ? Color.FromArgb(59, 130, 246) : Color.FromArgb(30, 41, 59);
+            ForeColor = Color.White;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Color parentBg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : CollectionTheme.Background;
+            using (Brush bgBrush = new SolidBrush(parentBg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
+
+            Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            Color bg = isPrimary
+                ? (hot ? Color.FromArgb(96, 165, 250) : Color.FromArgb(59, 130, 246))
+                : (hot ? Color.FromArgb(51, 65, 85) : Color.FromArgb(30, 41, 59));
+            Color border = isPrimary ? Color.FromArgb(59, 130, 246) : Color.FromArgb(71, 85, 105);
+
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rect, 8))
+            {
+                using (Brush brush = new SolidBrush(bg))
+                    e.Graphics.FillPath(brush, path);
+                using (Pen pen = new Pen(border, 1f))
+                    e.Graphics.DrawPath(pen, path);
+            }
+
+            using (StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            using (Brush textBrush = new SolidBrush(ForeColor))
+            {
+                e.Graphics.DrawString(Text, Font, textBrush, rect, sf);
+            }
+
+            if (Focused)
+            {
+                Rectangle fRect = Rectangle.Inflate(rect, -2, -2);
+                using (System.Drawing.Drawing2D.GraphicsPath fPath = DrawExtensions.RoundPath(fRect, 6))
+                using (Pen fPen = new Pen(CollectionTheme.Focus, 1.5f))
+                    e.Graphics.DrawPath(fPen, fPath);
             }
         }
     }
@@ -1344,29 +2222,156 @@ namespace DesktopFoldersDirect
     internal sealed class SettingsForm : Form
     {
         readonly DirectDesktopController controller;
-        CheckBox startup, reduce, dissolve;
-        NumericUpDown delay;
+        ModernToggleSwitch startupSwitch;
+        ModernToggleSwitch reduceSwitch;
+        ModernToggleSwitch dissolveSwitch;
+        ModernSlider delaySlider;
+        Label delayBadge;
+        Label targetStatus;
+
         internal SettingsForm(DirectDesktopController owner)
         {
-            controller = owner; Text = "Desktop Folders Settings"; StartPosition = FormStartPosition.CenterScreen; Size = new Size(430, 465); FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; BackColor = Color.FromArgb(28, 39, 57); ForeColor = Color.White;
-            Label heading = new Label { Text = "Settings", AutoSize = true, Font = new Font("Segoe UI", 16, FontStyle.Bold), Location = new Point(22, 20), ForeColor = Color.White };
-            startup = NewCheck("Khởi động cùng Windows", controller.Settings.StartWithWindows, 70);
-            reduce = NewCheck("Giảm chuyển động", controller.Settings.ReduceMotion, 105);
-            dissolve = NewCheck("Tự giải thể folder khi chỉ còn một shortcut", controller.Settings.DissolveSingleAppGroup, 140);
-            Label delayLabel = new Label { Text = "Thời gian giữ trên icon để tạo folder (ms)", AutoSize = true, Location = new Point(22, 186), ForeColor = Color.White };
-            delay = new NumericUpDown { Minimum = 120, Maximum = 800, Increment = 20, Value = Math.Max(120, Math.Min(800, controller.Settings.FolderHoverDelay)), Location = new Point(310, 182), Width = 75 };
-            Button backup = new Button { Text = "Backup bố cục…", Location = new Point(22, 235), Size = new Size(120, 29) }; backup.Click += delegate { controller.ExportLayout(); };
-            Button restore = new Button { Text = "Khôi phục…", Location = new Point(150, 235), Size = new Size(100, 29) }; restore.Click += delegate { controller.RestoreLayout(); };
-            Label targetHeading = new Label { Text = "Desktop target detection", AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Location = new Point(22, 283), ForeColor = Color.White };
-            Label targetStatus = new Label { Text = ExplorerDesktop.ScanStatus, AutoSize = false, Size = new Size(364, 72), Location = new Point(22, 310), ForeColor = Color.FromArgb(190, 205, 225) };
-            Button rescan = new Button { Text = "Quét lại icon", Location = new Point(22, 385), Size = new Size(100, 27) };
-            rescan.Click += delegate { controller.RefreshNow(); targetStatus.Text = ExplorerDesktop.ScanStatus; };
-            Button save = new Button { Text = "Lưu thay đổi", Location = new Point(278, 385), Size = new Size(108, 31), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(59, 130, 246), ForeColor = Color.White };
-            save.FlatAppearance.BorderSize = 0; save.Click += delegate { Apply(); Close(); };
-            Controls.AddRange(new Control[] { heading, startup, reduce, dissolve, delayLabel, delay, backup, restore, targetHeading, targetStatus, rescan, save });
+            controller = owner;
+            Text = "Desktop Folders Settings";
+            StartPosition = FormStartPosition.CenterScreen;
+            Size = new Size(520, 620);
+            FormBorderStyle = FormBorderStyle.None;
+            BackColor = CollectionTheme.Background;
+            ForeColor = CollectionTheme.Text;
+            ShowInTaskbar = true;
+            DoubleBuffered = true;
+            KeyPreview = true;
+
+            // Header draggable bar
+            Panel header = new Panel { Location = new Point(0, 0), Size = new Size(520, 52), BackColor = Color.Transparent };
+            Icon appIcon = null;
+            try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            if (appIcon == null) appIcon = SystemIcons.Application;
+            PictureBox iconBox = new PictureBox { Image = appIcon.ToBitmap(), SizeMode = PictureBoxSizeMode.StretchImage, Location = new Point(20, 14), Size = new Size(24, 24), BackColor = Color.Transparent };
+            Label titleLabel = new Label { Text = "Cài đặt Desktop Folders", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(52, 16), AutoSize = true, BackColor = Color.Transparent };
+            Label badgeLabel = new Label { Text = "v6.0", Font = new Font("Segoe UI", 8f, FontStyle.Bold), ForeColor = CollectionTheme.MutedText, BackColor = Color.FromArgb(30, 41, 59), Location = new Point(236, 18), AutoSize = true, Padding = new Padding(4, 1, 4, 1) };
+            HeaderIconButton closeBtn = new HeaderIconButton(HeaderIconKind.Close, 34) { Location = new Point(520 - 46, 9), Size = new Size(34, 34), BackColor = Color.Transparent };
+            closeBtn.Click += delegate { Close(); };
+
+            Point dragStart = Point.Empty;
+            bool isDragging = false;
+            MouseEventHandler onHeaderDown = delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { isDragging = true; dragStart = e.Location; } };
+            MouseEventHandler onHeaderMove = delegate(object s, MouseEventArgs e) { if (isDragging && e.Button == MouseButtons.Left) { Left += e.X - dragStart.X; Top += e.Y - dragStart.Y; } };
+            MouseEventHandler onHeaderUp = delegate { isDragging = false; };
+            header.MouseDown += onHeaderDown; header.MouseMove += onHeaderMove; header.MouseUp += onHeaderUp;
+            titleLabel.MouseDown += onHeaderDown; titleLabel.MouseMove += onHeaderMove; titleLabel.MouseUp += onHeaderUp;
+            iconBox.MouseDown += onHeaderDown; iconBox.MouseMove += onHeaderMove; iconBox.MouseUp += onHeaderUp;
+            header.Controls.AddRange(new Control[] { iconBox, titleLabel, badgeLabel, closeBtn });
+            Controls.Add(header);
+
+            int hoverDelay = (controller != null && controller.Settings != null) ? controller.Settings.FolderHoverDelay : 280;
+            bool dissolve = (controller != null && controller.Settings != null) && controller.Settings.DissolveSingleAppGroup;
+            bool startWin = (controller != null && controller.Settings != null) && controller.Settings.StartWithWindows;
+            bool reduceMotion = (controller != null && controller.Settings != null) && controller.Settings.ReduceMotion;
+
+            // Card 1: Thao tác & Kéo thả
+            Label sec1 = CreateSectionHeader("THAO TÁC & KÉO THẢ", 56);
+            Controls.Add(sec1);
+
+            ModernCard card1 = new ModernCard { Location = new Point(25, 78), Size = new Size(470, 142) };
+            Label delayTitle = new Label { Text = "Thời gian giữ icon để gộp nhóm", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            Label delaySub = new Label { Text = "Giữ icon trên đích quá ngưỡng này để tạo nhóm. Thả trước đó Windows sẽ xử lý.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(300, 18), BackColor = Color.Transparent };
+            delayBadge = new Label { Size = new Size(130, 22), Location = new Point(326, 12), Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = Color.FromArgb(96, 165, 250), TextAlign = ContentAlignment.MiddleRight, BackColor = Color.Transparent };
+            delaySlider = new ModernSlider { Minimum = 120, Maximum = 800, Step = 20, Value = Math.Max(120, Math.Min(800, hoverDelay)), Location = new Point(14, 56), Size = new Size(442, 26) };
+            Action updateBadge = delegate {
+                int ms = delaySlider.Value;
+                string desc = ms <= 200 ? "Nhanh" : (ms <= 340 ? "Mặc định" : "Chậm");
+                delayBadge.Text = ms + " ms • " + desc;
+            };
+            delaySlider.ValueChanged += delegate { updateBadge(); };
+            updateBadge();
+
+            Panel div1 = new Panel { Location = new Point(14, 88), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
+            Label disTitle = new Label { Text = "Tự giải thể khi còn 1 shortcut", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 98), AutoSize = true, BackColor = Color.Transparent };
+            Label disSub = new Label { Text = "Tự hoàn trả icon gốc ra Desktop và xóa nhóm khi chỉ còn một ứng dụng.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 118), Size = new Size(380, 18), BackColor = Color.Transparent };
+            dissolveSwitch = new ModernToggleSwitch { Checked = dissolve, Location = new Point(410, 102) };
+            card1.Controls.AddRange(new Control[] { delayTitle, delaySub, delayBadge, delaySlider, div1, disTitle, disSub, dissolveSwitch });
+            Controls.Add(card1);
+
+            // Card 2: Hệ thống & Hiệu năng
+            Label sec2 = CreateSectionHeader("HỆ THỐNG & HIỆU NĂNG", 232);
+            Controls.Add(sec2);
+
+            ModernCard card2 = new ModernCard { Location = new Point(25, 254), Size = new Size(470, 124) };
+            Label startTitle = new Label { Text = "Khởi động cùng Windows", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            Label startSub = new Label { Text = "Tự động kích hoạt Desktop Folders chạy nền khi bạn đăng nhập.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(380, 18), BackColor = Color.Transparent };
+            startupSwitch = new ModernToggleSwitch { Checked = startWin, Location = new Point(410, 18) };
+
+            Panel div2 = new Panel { Location = new Point(14, 60), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
+            Label redTitle = new Label { Text = "Giảm chuyển động (Reduce Motion)", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 70), AutoSize = true, BackColor = Color.Transparent };
+            Label redSub = new Label { Text = "Tắt toàn bộ animation preview, phóng to/thu nhỏ để mở folder tức thì.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 90), Size = new Size(380, 18), BackColor = Color.Transparent };
+            reduceSwitch = new ModernToggleSwitch { Checked = reduceMotion, Location = new Point(410, 76) };
+            card2.Controls.AddRange(new Control[] { startTitle, startSub, startupSwitch, div2, redTitle, redSub, reduceSwitch });
+            Controls.Add(card2);
+
+            // Card 3: Chẩn đoán Desktop Explorer
+            Label sec3 = CreateSectionHeader("CHẨN ĐOÁN DESKTOP EXPLORER", 390);
+            Controls.Add(sec3);
+
+            ModernCard card3 = new ModernCard { Location = new Point(25, 412), Size = new Size(470, 128) };
+            Label connLabel = new Label { Text = "● Kết nối Desktop Explorer (SysListView32)", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(52, 211, 153), Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            ModernButton rescanBtn = new ModernButton("Làm mới Desktop", false) { Location = new Point(318, 10), Size = new Size(138, 28) };
+            rescanBtn.Click += delegate { if (controller != null) controller.RefreshNow(); targetStatus.Text = ExplorerDesktop.ScanStatus; };
+            Panel div3 = new Panel { Location = new Point(14, 44), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
+            targetStatus = new Label { Text = ExplorerDesktop.ScanStatus, AutoSize = false, Size = new Size(442, 70), Location = new Point(14, 52), Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(148, 163, 184), BackColor = Color.Transparent };
+            card3.Controls.AddRange(new Control[] { connLabel, rescanBtn, div3, targetStatus });
+            Controls.Add(card3);
+
+            // Footer
+            Label tip = new Label { Text = "Escape: Đóng  •  Enter: Lưu thay đổi", Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(100, 116, 139), Location = new Point(28, 568), AutoSize = true, BackColor = Color.Transparent };
+            ModernButton cancelBtn = new ModernButton("Đóng", false) { Location = new Point(292, 560), Size = new Size(88, 36) };
+            cancelBtn.Click += delegate { Close(); };
+            ModernButton saveBtn = new ModernButton("Lưu cài đặt", true) { Location = new Point(390, 560), Size = new Size(105, 36) };
+            saveBtn.Click += delegate { Apply(); Close(); };
+            Controls.AddRange(new Control[] { tip, cancelBtn, saveBtn });
+
+            KeyDown += delegate(object sender, KeyEventArgs e) {
+                if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; }
+                else if (e.KeyCode == Keys.Enter) { Apply(); Close(); e.Handled = true; }
+            };
         }
-        CheckBox NewCheck(string text, bool value, int y) { return new CheckBox { Text = text, Checked = value, AutoSize = true, Location = new Point(22, y), ForeColor = Color.White, BackColor = BackColor, Font = new Font("Segoe UI", 10) }; }
-        void Apply() { controller.Settings.StartWithWindows = startup.Checked; controller.Settings.ReduceMotion = reduce.Checked; controller.Settings.DissolveSingleAppGroup = dissolve.Checked; controller.Settings.FolderHoverDelay = (int)delay.Value; controller.SaveSettings(); }
+
+        Label CreateSectionHeader(string text, int y)
+        {
+            return new Label { Text = text, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), ForeColor = Color.FromArgb(148, 163, 184), Location = new Point(28, y), AutoSize = true, BackColor = Color.Transparent };
+        }
+
+        void Apply()
+        {
+            if (controller == null || controller.Settings == null) return;
+            controller.Settings.StartWithWindows = startupSwitch.Checked;
+            controller.Settings.ReduceMotion = reduceSwitch.Checked;
+            controller.Settings.DissolveSingleAppGroup = dissolveSwitch.Checked;
+            controller.Settings.FolderHoverDelay = delaySlider.Value;
+            controller.SaveSettings();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            Rectangle rounded = new Rectangle(0, 0, ClientSize.Width, ClientSize.Height);
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rounded, 16))
+            {
+                Region old = Region;
+                Region = new Region(path);
+                if (old != null) old.Dispose();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (Pen borderPen = new Pen(CollectionTheme.Border, 1.5f))
+                e.Graphics.DrawRoundedRectangle(borderPen, rect, 16);
+        }
     }
 
     internal sealed class DirectDesktopController : ApplicationContext
@@ -1425,13 +2430,10 @@ namespace DesktopFoldersDirect
             tray = new NotifyIcon { Icon = appIcon, Visible = false, Text = "Desktop Folders" };
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Items.Add("Desktop Folders đang hoạt động").Enabled = false;
-            menu.Items.Add("Settings…", null, delegate { new SettingsForm(this).Show(); });
-            menu.Items.Add("Backup bố cục…", null, delegate { ExportLayout(); });
-            menu.Items.Add("Khôi phục bố cục…", null, delegate { RestoreLayout(); });
+            menu.Items.Add("Settings…", null, delegate { OpenSettings(); });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Khôi phục toàn bộ icon rồi Exit", null, delegate { RestoreAllAndExit(); });
             menu.Items.Add("Exit", null, delegate { ExitThread(); });
-            tray.ContextMenuStrip = menu; tray.DoubleClick += delegate { new SettingsForm(this).Show(); }; tray.Visible = true;
+            tray.ContextMenuStrip = menu; tray.DoubleClick += delegate { OpenSettings(); }; tray.Visible = true;
 
             callback = HookCallback; hook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, callback, Native.GetModuleHandle(null), 0);
             if (hook == IntPtr.Zero)
@@ -1761,40 +2763,19 @@ namespace DesktopFoldersDirect
             catch (Exception error) { MessageBox.Show("Không thể tạo virtual folder: " + error.Message, "Desktop Folders"); }
         }
 
-        internal void ExportLayout()
-        {
-            using (SaveFileDialog dialog = new SaveFileDialog { Filter = "Desktop Folders backup|*.desktopfolders", FileName = "DesktopFolders-" + DateTime.Now.ToString("yyyyMMdd-HHmm") + ".desktopfolders" })
-            {
-                if (dialog.ShowDialog() != DialogResult.OK) return;
-                try
-                {
-                    VirtualLayout backup = DataStore.LoadVirtualLayout(); File.WriteAllText(dialog.FileName, DataStore.SerializeVirtualLayout(backup));
-                    MessageBox.Show("Đã backup " + backup.Groups.Count + " virtual group.", "Desktop Folders");
-                }
-                catch (Exception error) { MessageBox.Show("Backup thất bại: " + error.Message, "Desktop Folders"); }
-            }
-        }
+        SettingsForm activeSettingsForm;
 
-        internal void RestoreLayout()
+        internal void OpenSettings()
         {
-            using (OpenFileDialog dialog = new OpenFileDialog { Filter = "Desktop Folders backup|*.desktopfolders" })
+            if (activeSettingsForm != null && !activeSettingsForm.IsDisposed)
             {
-                if (dialog.ShowDialog() != DialogResult.OK) return;
-                if (MessageBox.Show("Khôi phục sẽ áp dụng lại virtual groups và ẩn các icon thành viên. Tiếp tục?", "Desktop Folders", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
-                try
-                {
-                    VirtualLayout backup = DataStore.DeserializeVirtualLayout(File.ReadAllText(dialog.FileName));
-                    if (backup == null || backup.Groups == null) throw new InvalidDataException("File backup không hợp lệ.");
-                    foreach (VirtualGroup group in backup.Groups)
-                    {
-                        if (String.IsNullOrEmpty(group.TilePath) || !Path.GetExtension(group.TilePath).Equals(".lnk", StringComparison.OrdinalIgnoreCase)) group.TilePath = Path.Combine(ExplorerDesktop.Desktop, group.Name + ".lnk");
-                        foreach (VirtualMember member in group.Members) if (File.Exists(member.Path)) { File.SetAttributes(member.Path, File.GetAttributes(member.Path) | FileAttributes.Hidden); ExplorerDesktop.NotifyPathChanged(member.Path); }
-                        GroupTileFactory.CreateOrUpdate(group);
-                    }
-                    DataStore.SaveVirtualLayout(backup); RefreshCache(); FolderPanel.NotifyLayoutChanged(); MessageBox.Show("Khôi phục virtual layout hoàn tất.", "Desktop Folders");
-                }
-                catch (Exception error) { MessageBox.Show("Khôi phục thất bại: " + error.Message, "Desktop Folders"); }
+                if (activeSettingsForm.WindowState == FormWindowState.Minimized) activeSettingsForm.WindowState = FormWindowState.Normal;
+                activeSettingsForm.BringToFront();
+                activeSettingsForm.Activate();
+                return;
             }
+            activeSettingsForm = new SettingsForm(this);
+            activeSettingsForm.Show();
         }
 
         internal void SaveSettings()
@@ -1807,19 +2788,6 @@ namespace DesktopFoldersDirect
                 key.Close();
             }
             catch { MessageBox.Show("Windows không cho phép thay đổi Startup.", "Desktop Folders"); }
-        }
-
-        void RestoreAllAndExit()
-        {
-            if (MessageBox.Show("Hiện lại toàn bộ icon thành viên, xóa các tile nhóm và thoát?", "Desktop Folders", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
-            VirtualLayout layout = DataStore.LoadVirtualLayout();
-            foreach (VirtualGroup group in layout.Groups)
-            {
-                foreach (VirtualMember member in group.Members) try { if (File.Exists(member.Path)) { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(member.Path); } } catch { }
-                try { if (File.Exists(group.TilePath)) File.Delete(group.TilePath); } catch { }
-                try { if (!String.IsNullOrEmpty(group.IconPath) && File.Exists(group.IconPath)) File.Delete(group.IconPath); } catch { }
-            }
-            DataStore.SaveVirtualLayout(new VirtualLayout()); ExitThread();
         }
 
         protected override void ExitThreadCore()
