@@ -6,6 +6,7 @@ param(
 
 $compiler = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $gac = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL"
+$backgroundAsset = Join-Path $PSScriptRoot "CollectionBackground.png"
 $references = @(
     "System.dll",
     "System.Core.dll",
@@ -29,11 +30,13 @@ if ($windowsRuntime -and $systemRuntime -and $numericsRuntime -and $vectorsRunti
 }
 
 if (-not (Test-Path -LiteralPath $compiler)) { throw "Không tìm thấy .NET Framework C# compiler: $compiler" }
+if (-not (Test-Path -LiteralPath $backgroundAsset)) { throw "Thiếu CollectionBackground.png" }
 if (-not (Test-Path -LiteralPath ".\DesktopFolders.ico")) {
     if (-not (Test-Path -LiteralPath ".\generate-icon.ps1")) { throw "Thiếu DesktopFolders.ico và generate-icon.ps1" }
     & ".\generate-icon.ps1"
 }
 $arguments = @("/nologo", "/target:winexe", "/optimize+", "/platform:anycpu", "/win32icon:DesktopFolders.ico", "/out:$Output")
+$arguments += "/resource:$backgroundAsset,DesktopFolders.CollectionBackground.png"
 $symbols = @()
 if ($TraceDrag) { $symbols += "TRACE_DRAG" }
 if ($TestBuild) { $symbols += "TEST" }

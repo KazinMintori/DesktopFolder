@@ -277,6 +277,7 @@ namespace DesktopFoldersDirect
     internal sealed class SingleInstanceCommandWindow : NativeWindow, IDisposable
     {
         internal const string WindowCaption = "DesktopFolders.Direct.Command.v6";
+        internal const string ActivateCommand = "DesktopFolders.Direct.Activate";
         readonly Action<string> receiver;
 
         internal SingleInstanceCommandWindow(Action<string> commandReceiver)
@@ -306,9 +307,9 @@ namespace DesktopFoldersDirect
             base.WndProc(ref message);
         }
 
-        internal static bool SendOpenGroup(string groupId)
+        internal static bool SendCommand(string command)
         {
-            if (String.IsNullOrWhiteSpace(groupId)) return false;
+            if (String.IsNullOrWhiteSpace(command)) return false;
             IntPtr target = IntPtr.Zero;
             for (int attempt = 0; attempt < 30 && target == IntPtr.Zero; attempt++)
             {
@@ -319,29 +320,28 @@ namespace DesktopFoldersDirect
             IntPtr text = IntPtr.Zero, packet = IntPtr.Zero;
             try
             {
-                text = Marshal.StringToHGlobalUni(groupId);
-                Native.COPYDATASTRUCT data = new Native.COPYDATASTRUCT { dwData = (IntPtr)1, cbData = (groupId.Length + 1) * 2, lpData = text };
+                text = Marshal.StringToHGlobalUni(command);
+                Native.COPYDATASTRUCT data = new Native.COPYDATASTRUCT { dwData = (IntPtr)1, cbData = (command.Length + 1) * 2, lpData = text };
                 packet = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Native.COPYDATASTRUCT)));
                 Marshal.StructureToPtr(data, packet, false);
                 bool accepted = Native.SendMessage(target, Native.WM_COPYDATA, IntPtr.Zero, packet) != IntPtr.Zero;
-                DataStore.LogDrag("COMMAND sent=" + groupId + " accepted=" + accepted);
+                DataStore.LogDrag("COMMAND sent=" + command + " accepted=" + accepted);
                 return accepted;
             }
             catch (Exception error) { DataStore.LogDrag("COMMAND send failed=" + error.Message); return false; }
             finally { if (packet != IntPtr.Zero) Marshal.FreeHGlobal(packet); if (text != IntPtr.Zero) Marshal.FreeHGlobal(text); }
         }
 
+        internal static bool SendOpenGroup(string groupId) { return SendCommand(groupId); }
+        internal static bool SendActivate() { return SendCommand(ActivateCommand); }
+
         public void Dispose() { try { DestroyHandle(); } catch { } }
     }
 
     internal static class Native
     {
-        internal const int WH_MOUSE_LL = 14;
-        internal const int WM_LBUTTONDOWN = 0x0201;
-        internal const int WM_LBUTTONUP = 0x0202;
-        internal const int WM_MOUSEMOVE = 0x0200;
-        internal const int WM_RBUTTONDOWN = 0x0204;
-        internal const int WM_MBUTTONDOWN = 0x0207;
+        internal const int WM_KEYDOWN = 0x0100;
+        internal const int WM_KEYUP = 0x0101;
         internal const int WM_CANCELMODE = 0x001F;
         internal const int WM_MOUSEACTIVATE = 0x0021;
         internal const int WM_COPYDATA = 0x004A;
@@ -356,9 +356,7 @@ namespace DesktopFoldersDirect
         internal const uint SWP_NOZORDER = 0x0004;
         internal const uint SWP_NOACTIVATE = 0x0010;
         internal const uint SWP_NOOWNERZORDER = 0x0200;
-        internal const int VK_LBUTTON = 0x01;
         internal const byte VK_ESCAPE = 0x1B;
-        internal const uint KEYEVENTF_KEYUP = 0x0002;
         internal const uint SHCNE_ASSOCCHANGED = 0x08000000;
         internal const uint SHCNE_DELETE = 0x00000004;
         internal const uint SHCNE_UPDATEITEM = 0x00002000;
@@ -369,19 +367,14 @@ namespace DesktopFoldersDirect
 
         [StructLayout(LayoutKind.Sequential)] internal struct POINT { public int x; public int y; }
         [StructLayout(LayoutKind.Sequential)] internal struct RECT { public int left; public int top; public int right; public int bottom; }
-        [StructLayout(LayoutKind.Sequential)] internal struct MSLLHOOKSTRUCT { public POINT pt; public int mouseData; public int flags; public int time; public IntPtr dwExtraInfo; }
         [StructLayout(LayoutKind.Sequential)] internal struct COPYDATASTRUCT { public IntPtr dwData; public int cbData; public IntPtr lpData; }
-        internal delegate IntPtr MouseHook(int code, IntPtr message, IntPtr data);
         internal delegate bool EnumWindowsDelegate(IntPtr window, IntPtr parameter);
 
-        [DllImport("user32.dll", SetLastError = true)] internal static extern IntPtr SetWindowsHookEx(int idHook, MouseHook callback, IntPtr module, uint thread);
-        [DllImport("user32.dll", SetLastError = true)] internal static extern bool UnhookWindowsHookEx(IntPtr hook);
-        [DllImport("user32.dll")] internal static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
         [DllImport("user32.dll", CharSet = CharSet.Auto)] internal static extern IntPtr FindWindow(string className, string title);
         [DllImport("user32.dll", CharSet = CharSet.Auto)] internal static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string title);
         [DllImport("user32.dll")] internal static extern bool EnumWindows(EnumWindowsDelegate callback, IntPtr parameter);
         [DllImport("user32.dll", CharSet = CharSet.Auto)] internal static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int virtualKey);
+        [DllImport("user32.dll", CharSet = CharSet.Auto)] internal static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] internal static extern IntPtr SetFocus(IntPtr window);
         [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(IntPtr window);
@@ -391,8 +384,6 @@ namespace DesktopFoldersDirect
         [DllImport("user32.dll")] internal static extern bool IsChild(IntPtr parent, IntPtr child);
         [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out RECT rectangle);
         [DllImport("user32.dll")] internal static extern bool UpdateWindow(IntPtr window);
-        [DllImport("user32.dll")] internal static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto)] internal static extern IntPtr GetModuleHandle(string moduleName);
         [DllImport("psapi.dll")] internal static extern bool EmptyWorkingSet(IntPtr process);
         [DllImport("shell32.dll")] internal static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
         [DllImport("user32.dll")] internal static extern bool DestroyIcon(IntPtr icon);
@@ -865,7 +856,7 @@ namespace DesktopFoldersDirect
         DesktopItem target;
         Rectangle finalBounds;
         readonly System.Windows.Forms.Timer animation;
-        int animationFrame;
+        int animationStarted;
         internal FolderPreviewOverlay()
         {
             FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; BackColor = Color.Magenta; TransparencyKey = Color.Magenta;
@@ -879,7 +870,7 @@ namespace DesktopFoldersDirect
         }
         internal void Arm(DesktopItem item, bool reduceMotion)
         {
-            target = item; finalBounds = Rectangle.Inflate(item.Bounds, 5, 5); animation.Stop(); animationFrame = reduceMotion ? 8 : 0;
+            target = item; finalBounds = Rectangle.Inflate(item.Bounds, 5, 5); animation.Stop(); animationStarted = Environment.TickCount;
             if (reduceMotion) Bounds = finalBounds;
             else
             {
@@ -895,7 +886,7 @@ namespace DesktopFoldersDirect
         }
         void AnimateArmed()
         {
-            animationFrame++; double progress = Math.Min(1.0, animationFrame / 8.0);
+            double progress = Math.Min(1.0, unchecked(Environment.TickCount - animationStarted) / 120.0);
             double eased = 1.0 - Math.Pow(1.0 - progress, 3.0);
             Rectangle start = target == null ? finalBounds : Rectangle.Inflate(target.Bounds, -8, -8);
             Bounds = new Rectangle(
@@ -1115,10 +1106,10 @@ namespace DesktopFoldersDirect
         readonly string label;
         readonly bool pinned;
         readonly bool gridMode;
-        readonly Color accent;
         readonly bool reduceMotion;
         System.Windows.Forms.Timer hoverAnimation;
         float hoverProgress;
+        int hoverLastFrame;
         bool hot;
         bool dragOver;
         bool dragging;
@@ -1129,7 +1120,7 @@ namespace DesktopFoldersDirect
         internal AppTile(string path, bool isPinned, bool grid, int width, bool reducedMotion)
         {
             ItemPath = path; label = Path.GetFileNameWithoutExtension(path); pinned = isPinned; gridMode = grid; icon = IconLoader.ForPath(path);
-            accent = AccentFromIcon(icon); reduceMotion = reducedMotion;
+            reduceMotion = reducedMotion;
             Size = grid ? new Size(width, width < 170 ? 106 : 134) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
             TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? "Đã ghim ưu tiên" : "";
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
@@ -1160,11 +1151,12 @@ namespace DesktopFoldersDirect
             float target = hot || dragOver || Focused ? 1f : 0f;
             if (reduceMotion) { hoverProgress = target; Invalidate(); return; }
             if (hoverAnimation == null) { hoverAnimation = new System.Windows.Forms.Timer { Interval = 15 }; hoverAnimation.Tick += delegate { AnimateHover(); }; }
-            hoverAnimation.Stop(); hoverAnimation.Start(); Invalidate();
+            hoverAnimation.Stop(); hoverLastFrame = Environment.TickCount; hoverAnimation.Start(); Invalidate();
         }
         void AnimateHover()
         {
-            float target = hot || dragOver || Focused ? 1f : 0f; hoverProgress += (target - hoverProgress) * .34f;
+            int now = Environment.TickCount; float seconds = Math.Max(1, Math.Min(45, unchecked(now - hoverLastFrame))) / 1000f; hoverLastFrame = now;
+            float target = hot || dragOver || Focused ? 1f : 0f; float response = 1f - (float)Math.Exp(-seconds / .045f); hoverProgress += (target - hoverProgress) * response;
             if (Math.Abs(target - hoverProgress) < .018f) { hoverProgress = target; hoverAnimation.Stop(); }
             Invalidate();
         }
@@ -1172,7 +1164,7 @@ namespace DesktopFoldersDirect
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             float interaction = Math.Max(0f, Math.Min(1f, hoverProgress)); int inset = 3 - (int)Math.Round(interaction * 2f);
-            int maximumCardHeight = gridMode ? (Width < 170 ? 76 : 100) : Height - 1;
+            int maximumCardHeight = Height - 1;
             Rectangle card = new Rectangle(inset, inset, Math.Max(8, Width - inset * 2 - 1), Math.Max(8, maximumCardHeight - (inset - 1) * 2));
             if (dragging)
             {
@@ -1180,20 +1172,12 @@ namespace DesktopFoldersDirect
                 using (Pen placeholderEdge = new Pen(Color.FromArgb(105, CollectionTheme.Focus), 1.5f)) { placeholderEdge.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash; e.Graphics.DrawRoundedRectangle(placeholderEdge, Rectangle.Inflate(card, -1, -1), CollectionTheme.RadiusCard - 1); }
                 return;
             }
-            Color top = Mix(CollectionTheme.Surface, accent, .23f + .11f * interaction);
-            Color bottom = Mix(CollectionTheme.Surface, accent, .08f + .07f * interaction);
-            using (System.Drawing.Drawing2D.LinearGradientBrush fill = new System.Drawing.Drawing2D.LinearGradientBrush(card, top, bottom, 90f)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
-            Rectangle glow = new Rectangle(card.X + card.Width / 5, card.Y + card.Height / 5, card.Width * 3 / 5, card.Height * 3 / 5);
-            using (System.Drawing.Drawing2D.GraphicsPath glowPath = new System.Drawing.Drawing2D.GraphicsPath())
-            {
-                glowPath.AddEllipse(glow);
-                using (System.Drawing.Drawing2D.PathGradientBrush radial = new System.Drawing.Drawing2D.PathGradientBrush(glowPath))
-                {
-                    radial.CenterColor = Color.FromArgb((int)(42 + 34 * interaction), accent); radial.SurroundColors = new Color[] { Color.FromArgb(0, accent) }; e.Graphics.FillPath(radial, glowPath);
-                }
-            }
-            Color idleEdge = Mix(CollectionTheme.Stroke, accent, .34f); Color edgeColor = Mix(idleEdge, accent, .72f * interaction);
-            using (Pen edge = new Pen(edgeColor, dragOver ? 2f : 1f + .35f * interaction)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
+            int glassAlpha = (int)(60 + 42 * interaction); Color glassBlue = Color.FromArgb(glassAlpha, 19, 54, 125), glassPurple = Color.FromArgb(Math.Max(40, glassAlpha - 10), 91, 24, 137);
+            using (System.Drawing.Drawing2D.LinearGradientBrush fill = new System.Drawing.Drawing2D.LinearGradientBrush(card, glassBlue, glassPurple, 0f)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
+            Color edgeBlue = Color.FromArgb((int)(74 + 120 * interaction), CollectionTheme.FocusBlue), edgePurple = Color.FromArgb((int)(74 + 120 * interaction), CollectionTheme.Focus);
+            using (System.Drawing.Drawing2D.LinearGradientBrush edgeGradient = new System.Drawing.Drawing2D.LinearGradientBrush(card, edgeBlue, edgePurple, 0f))
+            using (Pen edge = new Pen(edgeGradient, dragOver ? 2f : 1f + .35f * interaction)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
+            using (Pen reflection = new Pen(Color.FromArgb((int)(30 + 24 * interaction), 236, 223, 255), 1f)) e.Graphics.DrawLine(reflection, card.Left + 13, card.Top + 1, card.Right - 13, card.Top + 1);
             if (nestingTarget)
             {
                 using (Brush nestFill = new SolidBrush(Color.FromArgb(42, CollectionTheme.Focus))) e.Graphics.FillRoundedRectangle(nestFill, Rectangle.Inflate(card, -5, -5), CollectionTheme.RadiusCard - 4);
@@ -1210,19 +1194,19 @@ namespace DesktopFoldersDirect
             }
             if (gridMode && Width < 170)
             {
-                int iconSize = 42 + (int)Math.Round(3 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
+                int iconSize = 42 + (int)Math.Round(3 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + 10;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
                 using (Font name = new Font("Segoe UI", 9f, FontStyle.Regular))
                 using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(4, 82, Width - 8, 20), format);
+                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 4, card.Bottom - 27, card.Width - 8, 22), format);
             }
             else if (gridMode)
             {
-                int iconSize = 56 + (int)Math.Round(4 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
+                int iconSize = 56 + (int)Math.Round(4 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + 14;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
                 using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
                 using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(6, 108, Width - 12, 22), format);
+                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 6, card.Bottom - 29, card.Width - 12, 23), format);
             }
             else
             {
@@ -1237,25 +1221,6 @@ namespace DesktopFoldersDirect
         {
             amount = Math.Max(0f, Math.Min(1f, amount));
             return Color.FromArgb((int)(background.R + (foreground.R - background.R) * amount), (int)(background.G + (foreground.G - background.G) * amount), (int)(background.B + (foreground.B - background.B) * amount));
-        }
-        static Color AccentFromIcon(Image image)
-        {
-            try
-            {
-                using (Bitmap sample = new Bitmap(image, new Size(20, 20)))
-                {
-                    long r = 0, g = 0, b = 0, weight = 0;
-                    for (int y = 0; y < sample.Height; y += 2) for (int x = 0; x < sample.Width; x += 2)
-                    {
-                        Color c = sample.GetPixel(x, y); if (c.A < 90) continue;
-                        int spread = Math.Max(c.R, Math.Max(c.G, c.B)) - Math.Min(c.R, Math.Min(c.G, c.B)); int w = Math.Max(1, spread);
-                        r += c.R * w; g += c.G * w; b += c.B * w; weight += w;
-                    }
-                    if (weight > 0) return Color.FromArgb(Math.Max(55, Math.Min(230, (int)(r / weight))), Math.Max(55, Math.Min(230, (int)(g / weight))), Math.Max(55, Math.Min(230, (int)(b / weight))));
-                }
-            }
-            catch { }
-            return CollectionTheme.Focus;
         }
         static System.Drawing.Drawing2D.GraphicsPath StarPath(PointF center, float outer, float inner)
         {
@@ -1298,22 +1263,36 @@ namespace DesktopFoldersDirect
 
     internal static class CollectionTheme
     {
-        internal static readonly Color Background = Color.FromArgb(10, 11, 14);
-        internal static readonly Color Surface = Color.FromArgb(16, 18, 24);
-        internal static readonly Color SurfaceHover = Color.FromArgb(27, 30, 39);
-        internal static readonly Color Control = Color.FromArgb(16, 18, 24);
-        internal static readonly Color ControlActive = Color.FromArgb(31, 34, 44);
-        internal static readonly Color Border = Color.FromArgb(39, 42, 52);
-        internal static readonly Color Stroke = Color.FromArgb(33, 36, 45);
-        internal static readonly Color Focus = Color.FromArgb(124, 147, 255);
-        internal static readonly Color Text = Color.FromArgb(245, 246, 248);
-        internal static readonly Color SecondaryText = Color.FromArgb(182, 185, 194);
-        internal static readonly Color MutedText = Color.FromArgb(122, 126, 138);
+        internal static readonly Color Background = Color.FromArgb(5, 3, 19);
+        internal static readonly Color Surface = Color.FromArgb(25, 16, 53);
+        internal static readonly Color SurfaceHover = Color.FromArgb(49, 27, 91);
+        internal static readonly Color Control = Color.FromArgb(13, 9, 38);
+        internal static readonly Color ControlActive = Color.FromArgb(57, 22, 104);
+        internal static readonly Color Border = Color.FromArgb(64, 43, 116);
+        internal static readonly Color Stroke = Color.FromArgb(91, 75, 138);
+        internal static readonly Color NeonBlue = Color.FromArgb(55, 196, 255);
+        internal static readonly Color NeonIndigo = Color.FromArgb(88, 96, 255);
+        internal static readonly Color NeonPurple = Color.FromArgb(220, 72, 255);
+        internal static readonly Color Focus = NeonPurple;
+        internal static readonly Color FocusBlue = NeonBlue;
+        internal static readonly Color Text = Color.FromArgb(248, 244, 255);
+        internal static readonly Color SecondaryText = Color.FromArgb(221, 205, 255);
+        internal static readonly Color MutedText = Color.FromArgb(167, 139, 250);
+        internal static readonly Color Title = Color.FromArgb(196, 125, 255);
         internal static readonly Color Pin = Color.FromArgb(255, 215, 106);
         internal static readonly Color Danger = Color.FromArgb(255, 84, 84);
         internal const int RadiusWindow = 22;
         internal const int RadiusControl = 12;
         internal const int RadiusCard = 16;
+
+        internal static System.Drawing.Drawing2D.ColorBlend NeonBlend(int alpha)
+        {
+            int safeAlpha = Math.Max(0, Math.Min(255, alpha));
+            return new System.Drawing.Drawing2D.ColorBlend(3) {
+                Colors = new Color[] { Color.FromArgb(safeAlpha, NeonBlue), Color.FromArgb(safeAlpha, NeonIndigo), Color.FromArgb(safeAlpha, NeonPurple) },
+                Positions = new float[] { 0f, .52f, 1f }
+            };
+        }
     }
 
     internal sealed class SectionHeaderControl : Control
@@ -1344,6 +1323,33 @@ namespace DesktopFoldersDirect
 
     internal enum HeaderIconKind { Close, Expand, Collapse, Grid, List }
 
+    internal sealed class GradientLabel : Label
+    {
+        internal GradientLabel() { SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            Rectangle textArea = new Rectangle(0, 0, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
+            int gradientWidth = Math.Max(8, Math.Min(textArea.Width, (int)Math.Ceiling(e.Graphics.MeasureString(Text, Font).Width)));
+            Rectangle gradientArea = new Rectangle(0, 0, gradientWidth, textArea.Height);
+            using (StringFormat format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            {
+                using (System.Drawing.Drawing2D.LinearGradientBrush glow = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.NeonBlue, CollectionTheme.NeonPurple, 0f))
+                {
+                    glow.InterpolationColors = CollectionTheme.NeonBlend(42);
+                    foreach (Point offset in new Point[] { new Point(-1, 0), new Point(1, 0), new Point(0, -1), new Point(0, 1) })
+                    {
+                        Rectangle glowArea = textArea; glowArea.Offset(offset); e.Graphics.DrawString(Text, Font, glow, glowArea, format);
+                    }
+                }
+                using (System.Drawing.Drawing2D.LinearGradientBrush gradient = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.NeonBlue, CollectionTheme.NeonPurple, 0f))
+                {
+                    gradient.InterpolationColors = CollectionTheme.NeonBlend(255); gradient.GammaCorrection = true; e.Graphics.DrawString(Text, Font, gradient, textArea, format);
+                }
+            }
+        }
+    }
+
     internal sealed class HeaderIconButton : Button
     {
         HeaderIconKind kind;
@@ -1353,7 +1359,7 @@ namespace DesktopFoldersDirect
         internal bool Selected { get { return selected; } set { selected = value; AccessibleDescription = value ? "Đang chọn" : ""; Invalidate(); } }
         internal HeaderIconButton(HeaderIconKind iconKind, int width)
         {
-            kind = iconKind; Width = width; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.Transparent; ForeColor = CollectionTheme.SecondaryText; Cursor = Cursors.Hand; TabStop = true; Text = ""; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
+            kind = iconKind; Width = width; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = CollectionTheme.Control; ForeColor = CollectionTheme.SecondaryText; Cursor = Cursors.Hand; TabStop = true; Text = ""; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         }
         protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
@@ -1363,9 +1369,13 @@ namespace DesktopFoldersDirect
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.Clear(BackColor);
             Rectangle box = new Rectangle(4, 5, Math.Max(10, Width - 8), Math.Max(10, Height - 10));
-            Color background = hot || Focused ? (kind == HeaderIconKind.Close ? Color.FromArgb(48, CollectionTheme.Danger) : CollectionTheme.ControlActive) : (selected ? Color.FromArgb(35, CollectionTheme.Focus) : Color.Transparent);
-            Color glyph = selected ? CollectionTheme.Focus : (hot ? CollectionTheme.Text : ForeColor);
-            if (background.A > 0) using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 8);
+            Color background = hot || Focused ? (kind == HeaderIconKind.Close ? Color.FromArgb(58, CollectionTheme.Danger) : Color.FromArgb(126, CollectionTheme.ControlActive)) : (selected ? Color.FromArgb(118, 80, 24, 146) : Color.Transparent);
+            Color glyph = selected ? CollectionTheme.Text : (hot ? CollectionTheme.Text : ForeColor);
+            if (selected && kind != HeaderIconKind.Close)
+            {
+                using (System.Drawing.Drawing2D.LinearGradientBrush neon = new System.Drawing.Drawing2D.LinearGradientBrush(box, Color.FromArgb(190, CollectionTheme.FocusBlue), Color.FromArgb(190, CollectionTheme.Focus), 0f)) e.Graphics.FillRoundedRectangle(neon, box, 8);
+            }
+            else if (background.A > 0) using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 8);
             float cx = Width / 2f, cy = Height / 2f;
             using (Pen pen = new Pen(kind == HeaderIconKind.Close && hot ? Color.FromArgb(255, 128, 128) : glyph, 1.6f))
             {
@@ -1599,6 +1609,16 @@ namespace DesktopFoldersDirect
         internal PointF Velocity;
     }
 
+    internal sealed class BufferedPanel : Panel
+    {
+        internal BufferedPanel() { DoubleBuffered = true; SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true); }
+    }
+
+    internal sealed class BufferedFlowLayoutPanel : FlowLayoutPanel
+    {
+        internal BufferedFlowLayoutPanel() { DoubleBuffered = true; SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true); }
+    }
+
     internal sealed class FolderPanel : Form
     {
         internal const string SourceGroupFormat = "DesktopFolders.SourceGroup.v1";
@@ -1651,6 +1671,7 @@ namespace DesktopFoldersDirect
         string nestHoverTargetPath;
         int nestHoverStarted;
         bool nestDropArmed;
+        bool ReduceMotionNow { get { return settings.ReduceMotion || SystemInformation.TerminalServerSession; } }
 
         internal static void ShowOrActivate(string tilePath, Rectangle source, AppSettings currentSettings)
         {
@@ -1697,7 +1718,8 @@ namespace DesktopFoldersDirect
             Rectangle live;
             if (ExplorerDesktop.TryGetIconBounds(tilePath, out live)) source = live;
             groupId = group.Id; anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5); Text = "Desktop Folders — " + group.Name;
-            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Border; Padding = new Padding(1); Opacity = 1.0; AllowDrop = true; KeyPreview = true;
+            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Background; Padding = new Padding(1); Opacity = 1.0; AllowDrop = true; KeyPreview = true; DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             nestHoverTimer = new System.Windows.Forms.Timer { Interval = settings.FolderHoverDelay }; nestHoverTimer.Tick += delegate { ArmNestHover(); };
 #if TRACE_DRAG
             ShowInTaskbar = true;
@@ -1713,7 +1735,7 @@ namespace DesktopFoldersDirect
 
             GradientPanel shell = new GradientPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 9, 10), CornerRadius = CollectionTheme.RadiusWindow };
             Controls.Add(shell);
-            Panel header = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Color.Transparent };
+            Panel header = new BufferedPanel { Dock = DockStyle.Top, Height = 58, BackColor = Color.Transparent };
             shell.Controls.Add(header);
             HeaderIconButton close = HeaderButton(HeaderIconKind.Close, 32); close.Dock = DockStyle.Right; close.Click += delegate { CloseWithMorph(); };
             expandButton = HeaderButton(HeaderIconKind.Expand, 32); expandButton.Dock = DockStyle.Right; expandButton.Click += delegate { ToggleExpanded(); };
@@ -1725,27 +1747,27 @@ namespace DesktopFoldersDirect
             header.Controls.Add(gridButton); header.Controls.Add(listButton); header.Controls.Add(expandButton); header.Controls.Add(close);
             tooltips = new ToolTip(); tooltips.SetToolTip(gridButton, "Bố cục lưới"); tooltips.SetToolTip(listButton, "Bố cục danh sách"); tooltips.SetToolTip(expandButton, "Phóng to collection"); tooltips.SetToolTip(close, "Đóng collection");
 
-            Panel content = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+            Panel content = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
             shell.Controls.Add(content); content.BringToFront();
-            titleLabel = new Label { Text = group.Name, ForeColor = CollectionTheme.Text, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 0), Width = 190, Height = 54, Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = false };
-            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Background, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 12), Width = 190 };
+            titleLabel = new GradientLabel { Text = group.Name, ForeColor = CollectionTheme.Title, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 0), Width = 190, Height = 54, Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = false };
+            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Title, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 12), Width = 190 };
             titleLabel.Click += delegate { BeginTitleEdit(); };
             titleEditor.Leave += delegate { CommitTitleEdit(); };
             titleEditor.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { CommitTitleEdit(); e.SuppressKeyPress = true; } else if (e.KeyCode == Keys.Escape) { EndTitleEdit(false); e.SuppressKeyPress = true; } };
             header.Controls.Add(titleLabel); header.Controls.Add(titleEditor); titleLabel.SendToBack(); titleEditor.SendToBack();
             header.Resize += delegate { int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; };
 
-            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, BorderColor = CollectionTheme.Stroke, BorderThickness = 1, ShowSearchGlyph = true, GlyphColor = CollectionTheme.MutedText, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, BorderColor = CollectionTheme.NeonBlue, BorderEndColor = CollectionTheme.NeonPurple, BorderThickness = 2, ShowSearchGlyph = true, GlyphColor = CollectionTheme.NeonPurple, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = "Tìm trong collection" };
             searchHint = new Label { Text = "Tìm trong collection…", ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
             searchHint.Click += delegate { search.Focus(); };
-            search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.Focus; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.Focus; searchContainer.Invalidate(); };
-            search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.Stroke; searchContainer.BorderThickness = 1; searchContainer.GlyphColor = CollectionTheme.MutedText; searchContainer.Invalidate(); };
+            search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonBlue; searchContainer.Invalidate(); };
+            search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonPurple; searchContainer.Invalidate(); };
             searchContainer.Controls.Add(search); searchContainer.Controls.Add(searchHint); searchHint.BringToFront();
             content.Controls.Add(searchContainer);
 
-            appsViewport = new Panel { Location = new Point(0, 54), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
-            apps = new FlowLayoutPanel { Location = Point.Empty, AutoScroll = false, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, BackColor = Color.Transparent, Padding = new Padding(5, 0, 0, 0), AllowDrop = true };
+            appsViewport = new BufferedPanel { Location = new Point(0, 54), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+            apps = new BufferedFlowLayoutPanel { Location = Point.Empty, AutoScroll = false, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, BackColor = Color.Transparent, Padding = new Padding(5, 0, 0, 0), AllowDrop = true };
             themedScroll = new DarkScrollBar(appsViewport, apps) { Width = 6, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right };
             appsViewport.Controls.Add(apps); content.Controls.Add(appsViewport);
             content.Controls.Add(themedScroll); themedScroll.BringToFront();
@@ -1799,7 +1821,7 @@ namespace DesktopFoldersDirect
             Point location = FindOpenLocation(CalculateAnchoredLocation(anchorBounds, target, work), target, work, this);
             Rectangle previous = Bounds; finalSize = target; finalLocation = location; Bounds = new Rectangle(location, target); Opacity = 1.0;
             expandButton.IconKind = expanded ? HeaderIconKind.Collapse : HeaderIconKind.Expand; expandButton.AccessibleName = expanded ? "Thu nhỏ collection" : "Phóng to collection"; tooltips.SetToolTip(expandButton, expanded ? "Thu nhỏ collection" : "Phóng to collection"); RenderApps();
-            Promote(); if (!settings.ReduceMotion) StartCompositionCue(previous, Bounds);
+            Promote(); if (!ReduceMotionNow) StartCompositionCue(previous, Bounds);
         }
 
         Bitmap CaptureSnapshot()
@@ -1809,7 +1831,7 @@ namespace DesktopFoldersDirect
         }
         void StartCompositionCue(Rectangle from, Rectangle to)
         {
-            if (IsDisposed || settings.ReduceMotion || from == to) return;
+            if (IsDisposed || ReduceMotionNow || from == to) return;
             CancelCompositionCue(); CompositionMotionOverlay cue = null;
             try
             {
@@ -1844,7 +1866,7 @@ namespace DesktopFoldersDirect
         {
             if (IsDisposed) return;
             CancelCompositionCue();
-            if (settings.ReduceMotion) { Close(); return; }
+            if (ReduceMotionNow) { Close(); return; }
             Bitmap image = null; Rectangle from = Bounds, to = animationOrigin;
             try
             {
@@ -1935,7 +1957,7 @@ namespace DesktopFoldersDirect
                     SectionHeaderControl section = new SectionHeaderControl(pinned ? "Đã ghim" : "Tất cả ứng dụng", pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
                     apps.Controls.Add(section); apps.SetFlowBreak(section, true); activePinnedSection = pinned;
                 }
-                AppTile tile = new AppTile(path, pinned, gridMode, width, settings.ReduceMotion) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
+                AppTile tile = new AppTile(path, pinned, gridMode, width, ReduceMotionNow) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
                 tooltips.SetToolTip(tile, Path.GetFileNameWithoutExtension(path));
                 tile.MouseWheel += delegate(object sender, MouseEventArgs e) { themedScroll.ScrollBy(-(e.Delta / 120) * 70); HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; };
                 Point childDragStart = Point.Empty; bool childDidDrag = false;
@@ -2103,7 +2125,7 @@ namespace DesktopFoldersDirect
         }
         void StartReorderAnimation(Dictionary<string, Point> previous)
         {
-            if (settings.ReduceMotion || previous == null || previous.Count == 0) { reorderVelocities.Clear(); return; }
+            if (ReduceMotionNow || previous == null || previous.Count == 0) { reorderVelocities.Clear(); return; }
             List<TileMotion> motions = new List<TileMotion>();
             foreach (AppTile tile in apps.Controls.OfType<AppTile>())
             {
@@ -2156,7 +2178,7 @@ namespace DesktopFoldersDirect
         }
         void AnimateMoveOut(AppTile tile, string path)
         {
-            if (settings.ReduceMotion || tile == null || tile.IsDisposed) { MoveOut(path); return; }
+            if (ReduceMotionNow || tile == null || tile.IsDisposed) { MoveOut(path); return; }
             Bitmap image = null;
             try
             {
@@ -2349,12 +2371,34 @@ namespace DesktopFoldersDirect
         protected override void Dispose(bool disposing) { if (disposing) { if (activeDragGhost != null) activeDragGhost.Dispose(); if (releaseTopMost != null) releaseTopMost.Dispose(); if (reorderAnimation != null) reorderAnimation.Dispose(); if (nestHoverTimer != null) nestHoverTimer.Dispose(); if (tooltips != null) tooltips.Dispose(); } base.Dispose(disposing); }
     }
 
+    internal static class CollectionArtwork
+    {
+        static readonly Bitmap background = LoadBackground();
+        internal static Image Background { get { return background; } }
+        static Bitmap LoadBackground()
+        {
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("DesktopFolders.CollectionBackground.png"))
+                using (Image source = stream == null ? null : Image.FromStream(stream)) if (source != null) return new Bitmap(source);
+            }
+            catch { }
+            return null;
+        }
+    }
+
     internal sealed class GradientPanel : Panel
     {
         int cornerRadius;
+        Bitmap renderedBackground;
+        Size renderedSize;
         internal int CornerRadius { get { return cornerRadius; } set { cornerRadius = value; UpdateRoundedRegion(); } }
-        internal GradientPanel() { DoubleBuffered = true; BackColor = Color.Transparent; }
-        protected override void OnResize(EventArgs eventArgs) { base.OnResize(eventArgs); UpdateRoundedRegion(); }
+        internal GradientPanel()
+        {
+            DoubleBuffered = true; BackColor = CollectionTheme.Background;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+        protected override void OnResize(EventArgs eventArgs) { base.OnResize(eventArgs); UpdateRoundedRegion(); RebuildBackground(); }
         void UpdateRoundedRegion()
         {
             if (cornerRadius <= 0 || ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
@@ -2364,10 +2408,45 @@ namespace DesktopFoldersDirect
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             Rectangle area = ClientRectangle; if (area.Width <= 0 || area.Height <= 0) return;
-            using (Brush background = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(background, area);
-            Rectangle glow = new Rectangle(-area.Width / 4, -area.Height / 2, area.Width + area.Width / 2, Math.Max(180, area.Height));
-            using (System.Drawing.Drawing2D.LinearGradientBrush ambient = new System.Drawing.Drawing2D.LinearGradientBrush(glow, Color.FromArgb(29, CollectionTheme.Focus), Color.FromArgb(0, CollectionTheme.Focus), 90f)) e.Graphics.FillEllipse(ambient, glow);
+            if (renderedBackground == null || renderedSize != area.Size) RebuildBackground();
+            if (renderedBackground != null) e.Graphics.DrawImageUnscaled(renderedBackground, Point.Empty); else using (Brush fallback = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(fallback, area);
         }
+        void RebuildBackground()
+        {
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return; if (renderedBackground != null) { renderedBackground.Dispose(); renderedBackground = null; }
+            renderedSize = ClientSize; renderedBackground = new Bitmap(ClientSize.Width, ClientSize.Height); using (Graphics graphics = Graphics.FromImage(renderedBackground)) RenderBackground(graphics, new Rectangle(Point.Empty, ClientSize)); Invalidate();
+        }
+        static void RenderBackground(Graphics graphics, Rectangle area)
+        {
+            graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality; graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic; graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            Image artwork = CollectionArtwork.Background;
+            if (artwork != null)
+            {
+                double destinationAspect = area.Width / (double)Math.Max(1, area.Height), sourceAspect = artwork.Width / (double)Math.Max(1, artwork.Height); Rectangle source;
+                if (destinationAspect >= sourceAspect)
+                {
+                    int cropHeight = Math.Max(1, Math.Min(artwork.Height, (int)Math.Round(artwork.Width / destinationAspect))); source = new Rectangle(0, artwork.Height - cropHeight, artwork.Width, cropHeight);
+                }
+                else
+                {
+                    int cropWidth = Math.Max(1, Math.Min(artwork.Width, (int)Math.Round(artwork.Height * destinationAspect))); source = new Rectangle((artwork.Width - cropWidth) / 2, 0, cropWidth, artwork.Height);
+                }
+                graphics.DrawImage(artwork, area, source, GraphicsUnit.Pixel);
+                using (System.Drawing.Drawing2D.LinearGradientBrush veil = new System.Drawing.Drawing2D.LinearGradientBrush(area, Color.FromArgb(142, 2, 1, 13), Color.FromArgb(50, 18, 5, 48), 90f)) graphics.FillRectangle(veil, area);
+            }
+            else using (Brush fallback = new SolidBrush(CollectionTheme.Background)) graphics.FillRectangle(fallback, area);
+            Rectangle glow = new Rectangle(-area.Width / 4, -area.Height / 2, area.Width + area.Width / 2, Math.Max(180, area.Height));
+            using (System.Drawing.Drawing2D.LinearGradientBrush ambient = new System.Drawing.Drawing2D.LinearGradientBrush(glow, Color.FromArgb(20, CollectionTheme.Focus), Color.FromArgb(0, CollectionTheme.Focus), 90f)) graphics.FillEllipse(ambient, glow);
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e); if (ClientSize.Width <= 2 || ClientSize.Height <= 2) return; e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Rectangle border = new Rectangle(1, 1, ClientSize.Width - 3, ClientSize.Height - 3);
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(border, Math.Max(4, cornerRadius - 1)))
+            using (System.Drawing.Drawing2D.LinearGradientBrush neon = new System.Drawing.Drawing2D.LinearGradientBrush(border, Color.FromArgb(205, CollectionTheme.FocusBlue), Color.FromArgb(220, CollectionTheme.Focus), 0f))
+            using (Pen pen = new Pen(neon, 1.4f)) e.Graphics.DrawPath(pen, path);
+        }
+        protected override void Dispose(bool disposing) { if (disposing && renderedBackground != null) renderedBackground.Dispose(); base.Dispose(disposing); }
     }
 
     internal sealed class DarkScrollBar : Control
@@ -2393,11 +2472,15 @@ namespace DesktopFoldersDirect
         internal void SyncFromTarget()
         {
             if (IsDisposed || viewport.IsDisposed || content.IsDisposed) return;
-            maximum = Math.Max(0, content.Height - viewport.ClientSize.Height); value = Math.Max(0, Math.Min(maximum, value)); content.Top = -value;
+            maximum = Math.Max(0, content.Height - viewport.ClientSize.Height); value = Math.Max(0, Math.Min(maximum, value)); MoveContent(-value);
             Visible = maximum > 0 && Height > 20; Invalidate();
         }
-        internal void SetValue(int requested) { value = Math.Max(0, Math.Min(maximum, requested)); content.Top = -value; Invalidate(); }
+        internal void SetValue(int requested) { value = Math.Max(0, Math.Min(maximum, requested)); MoveContent(-value); Invalidate(); }
         internal void ScrollBy(int delta) { SyncFromTarget(); SetValue(value + delta); }
+        void MoveContent(int requestedTop)
+        {
+            if (content.Top == requestedTop) return; content.Top = requestedTop; content.Invalidate(true); viewport.Invalidate(true); viewport.Update();
+        }
         Rectangle ThumbRectangle()
         {
             int total = Math.Max(1, content.Height), visible = Math.Max(1, viewport.ClientSize.Height);
@@ -2434,10 +2517,11 @@ namespace DesktopFoldersDirect
     {
         internal int Radius { get; set; }
         internal Color BorderColor { get; set; }
+        internal Color BorderEndColor { get; set; }
         internal int BorderThickness { get; set; }
         internal bool ShowSearchGlyph { get; set; }
         internal Color GlyphColor { get; set; }
-        internal RoundedPanel() { Radius = 16; BorderColor = Color.Transparent; BorderThickness = 0; GlyphColor = CollectionTheme.MutedText; DoubleBuffered = true; Resize += delegate { UpdateRoundedRegion(); }; }
+        internal RoundedPanel() { Radius = 16; BorderColor = Color.Transparent; BorderEndColor = Color.Transparent; BorderThickness = 0; GlyphColor = CollectionTheme.MutedText; DoubleBuffered = true; Resize += delegate { UpdateRoundedRegion(); }; }
         void UpdateRoundedRegion()
         {
             if (ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0) return;
@@ -2455,7 +2539,20 @@ namespace DesktopFoldersDirect
             {
                 int inset = Math.Max(1, BorderThickness);
                 Rectangle border = new Rectangle(inset, inset, Math.Max(1, ClientSize.Width - inset * 2 - 1), Math.Max(1, ClientSize.Height - inset * 2 - 1));
-                using (Pen pen = new Pen(BorderColor, BorderThickness)) e.Graphics.DrawRoundedRectangle(pen, border, Math.Max(3, Radius - inset));
+                if (BorderEndColor.A > 0)
+                {
+                    using (System.Drawing.Drawing2D.LinearGradientBrush glowGradient = new System.Drawing.Drawing2D.LinearGradientBrush(border, BorderColor, BorderEndColor, 0f))
+                    {
+                        glowGradient.InterpolationColors = CollectionTheme.NeonBlend(52);
+                        using (Pen glowPen = new Pen(glowGradient, BorderThickness + 2f)) e.Graphics.DrawRoundedRectangle(glowPen, border, Math.Max(3, Radius - inset));
+                    }
+                    using (System.Drawing.Drawing2D.LinearGradientBrush gradient = new System.Drawing.Drawing2D.LinearGradientBrush(border, BorderColor, BorderEndColor, 0f))
+                    {
+                        gradient.InterpolationColors = CollectionTheme.NeonBlend(255); gradient.GammaCorrection = true;
+                        using (Pen pen = new Pen(gradient, BorderThickness)) e.Graphics.DrawRoundedRectangle(pen, border, Math.Max(3, Radius - inset));
+                    }
+                }
+                else using (Pen pen = new Pen(BorderColor, BorderThickness)) e.Graphics.DrawRoundedRectangle(pen, border, Math.Max(3, Radius - inset));
             }
             if (ShowSearchGlyph)
             {
@@ -2936,15 +3033,13 @@ namespace DesktopFoldersDirect
 
     internal sealed class DirectDesktopController : ApplicationContext
     {
-        enum DragOwnership { Windows, HoverPending, MergeArmed }
+        enum DragOwnership { Windows, HoverPending, MergeArmed, Cancelled }
         readonly object cacheLock = new object();
         DesktopItem[] cache = new DesktopItem[0];
         int scanInProgress;
         int inactiveTicks;
         volatile bool exiting;
         System.Threading.Timer scanner;
-        Native.MouseHook callback;
-        IntPtr hook;
         DesktopItem source;
         DesktopItem hoverTarget;
         bool dragging;
@@ -2959,19 +3054,25 @@ namespace DesktopFoldersDirect
         System.Windows.Forms.Timer hoverArm;
         System.Windows.Forms.Timer refreshAfterWindowsDrop;
         System.Windows.Forms.Timer commandPump;
+        System.Windows.Forms.Timer pointerMonitor;
+        bool leftButtonWasDown;
         DesktopItem pendingSource;
         DesktopItem pendingTarget;
         Action pending;
         SingleInstanceCommandWindow commandWindow;
         readonly object openRequestLock = new object();
         readonly HashSet<string> pendingOpenRequests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int settingsActivationRequested;
         int requestFileTicks;
         internal AppSettings Settings { get; private set; }
 
-        internal DirectDesktopController(string requestedGroupId)
+        internal DirectDesktopController(string requestedGroupId, bool showSettingsOnLaunch)
         {
             Settings = DataStore.LoadSettings();
-            commandWindow = new SingleInstanceCommandWindow(delegate(string groupId) { EnqueueOpenGroup(groupId); });
+            commandWindow = new SingleInstanceCommandWindow(delegate(string command) {
+                if (String.Equals(command, SingleInstanceCommandWindow.ActivateCommand, StringComparison.Ordinal)) RequestSettingsActivation();
+                else EnqueueOpenGroup(command);
+            });
             folderPreview = new FolderPreviewOverlay(); folderPreview.CreateControl();
 
             deferred = new System.Windows.Forms.Timer { Interval = 10 };
@@ -2983,8 +3084,11 @@ namespace DesktopFoldersDirect
             refreshAfterWindowsDrop = new System.Windows.Forms.Timer { Interval = 450 };
             refreshAfterWindowsDrop.Tick += delegate { refreshAfterWindowsDrop.Stop(); RefreshCache(); };
             commandPump = new System.Windows.Forms.Timer { Interval = 20 };
-            commandPump.Tick += delegate { DrainOpenGroupRequests(); };
+            commandPump.Tick += delegate { DrainCommands(); };
             commandPump.Start();
+            pointerMonitor = new System.Windows.Forms.Timer { Interval = 15 };
+            pointerMonitor.Tick += delegate { PollDesktopPointer(); };
+            pointerMonitor.Start();
 
             Icon appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             tray = new NotifyIcon { Icon = appIcon, Visible = false, Text = "Desktop Folders" };
@@ -2995,12 +3099,8 @@ namespace DesktopFoldersDirect
             menu.Items.Add("Exit", null, delegate { ExitThread(); });
             tray.ContextMenuStrip = menu; tray.DoubleClick += delegate { OpenSettings(); }; tray.Visible = true;
 
-            callback = HookCallback; hook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, callback, Native.GetModuleHandle(null), 0);
-            if (hook == IntPtr.Zero)
-            {
-                MessageBox.Show("Không thể kết nối với thao tác chuột của Desktop. Mã lỗi: " + Marshal.GetLastWin32Error(), "Desktop Folders"); ExitThread(); return;
-            }
             if (!String.IsNullOrEmpty(requestedGroupId)) EnqueueOpenGroup(requestedGroupId);
+            if (showSettingsOnLaunch) RequestSettingsActivation();
             StartBackgroundInitialization();
         }
 
@@ -3010,6 +3110,7 @@ namespace DesktopFoldersDirect
                 try
                 {
 #if !TEST
+                    if (!exiting) SyncStartupRegistration(false);
                     if (!exiting) RegisterVirtualGroupType();
                     bool repairedTiles = false;
                     if (!exiting && NeedsVirtualTileRepair()) { EnsureVirtualTiles(); repairedTiles = true; }
@@ -3043,6 +3144,14 @@ namespace DesktopFoldersDirect
         void EnqueueOpenGroup(string groupId)
         {
             if (String.IsNullOrWhiteSpace(groupId)) return; lock (openRequestLock) pendingOpenRequests.Add(groupId.Trim());
+        }
+
+        void RequestSettingsActivation() { Interlocked.Exchange(ref settingsActivationRequested, 1); }
+
+        void DrainCommands()
+        {
+            if (Interlocked.Exchange(ref settingsActivationRequested, 0) != 0) OpenSettings();
+            DrainOpenGroupRequests();
         }
 
         void DrainOpenGroupRequests()
@@ -3132,115 +3241,58 @@ namespace DesktopFoldersDirect
             return ExplorerDesktop.HitTest(snapshot, point, source == null ? null : source.Path);
         }
 
-        IntPtr HookCallback(int code, IntPtr message, IntPtr data)
+        void PollDesktopPointer()
         {
-            if (code < 0) return Native.CallNextHookEx(hook, code, message, data);
-            Native.MSLLHOOKSTRUCT raw = (Native.MSLLHOOKSTRUCT)Marshal.PtrToStructure(data, typeof(Native.MSLLHOOKSTRUCT));
-            Point point = new Point(raw.pt.x, raw.pt.y); int action = message.ToInt32();
+            if (exiting) return; Point point = Cursor.Position; bool leftDown = (Control.MouseButtons & MouseButtons.Left) != 0;
+            if (leftDown && !leftButtonWasDown) BeginDesktopPointer(point);
+            else if (leftDown && source != null) ContinueDesktopPointer(point);
+            else if (!leftDown && leftButtonWasDown && source != null) EndDesktopPointer(point);
+            leftButtonWasDown = leftDown;
+        }
 
-            if ((action == Native.WM_RBUTTONDOWN || action == Native.WM_MBUTTONDOWN) && source != null)
-            {
-                ResetDrag(); return Native.CallNextHookEx(hook, code, message, data);
-            }
+        void BeginDesktopPointer(Point point)
+        {
+            source = null; dragging = false; down = point; hoverTarget = null; armedTarget = null; dragOwnership = DragOwnership.Windows; hoverArm.Stop();
+            if (!ExplorerDesktop.IsDesktopForeground() || !ExplorerDesktop.IsPointOnDesktopSurface(point)) return;
+            FolderPanel.NotifyDesktopClick(point); DesktopItem[] snapshot; lock (cacheLock) snapshot = cache; source = ExplorerDesktop.HitTest(snapshot, point, null);
+            if (source != null) DataStore.LogDrag("POLL_DOWN source=" + source.Name);
+        }
 
-            if (action == Native.WM_LBUTTONDOWN)
+        void ContinueDesktopPointer(Point point)
+        {
+            int thresholdX = Math.Max(2, SystemInformation.DragSize.Width / 2), thresholdY = Math.Max(2, SystemInformation.DragSize.Height / 2);
+            if (!dragging && (Math.Abs(point.X - down.X) >= thresholdX || Math.Abs(point.Y - down.Y) >= thresholdY)) dragging = true;
+            if (!dragging || dragOwnership == DragOwnership.Cancelled) return;
+            if (dragOwnership == DragOwnership.MergeArmed)
             {
-                source = null;
-                // A newly shown collection may still race Explorer for foreground
-                // activation. Only start a Desktop gesture when the pointer is truly
-                // over the Desktop ListView, never through our popup window.
-                if (ExplorerDesktop.IsDesktopForeground() && ExplorerDesktop.IsPointOnDesktopSurface(point))
-                {
-                    FolderPanel.NotifyDesktopClick(point);
-                    DesktopItem[] snapshot; lock (cacheLock) snapshot = cache;
-                    source = ExplorerDesktop.HitTest(snapshot, point, null);
-                }
-                dragging = false; down = point; hoverTarget = null; armedTarget = null; dragOwnership = DragOwnership.Windows; hoverArm.Stop();
-                if (source != null) DataStore.LogDrag("DOWN source=" + source.Name);
-                return Native.CallNextHookEx(hook, code, message, data);
+                if (armedTarget != null && Rectangle.Inflate(armedTarget.Bounds, 8, 8).Contains(point)) { if (!folderPreview.Visible) folderPreview.Arm(armedTarget, true); }
+                else { armedTarget = null; hoverTarget = null; dragOwnership = DragOwnership.Cancelled; hoverArm.Stop(); folderPreview.HideAnimated(); }
+                return;
             }
+            DesktopItem target = Hit(point);
+            if (target != null && target.Path != source.Path)
+            {
+                if (hoverTarget == null || hoverTarget.Path != target.Path)
+                {
+                    hoverTarget = target; hoverStarted = Environment.TickCount; dragOwnership = DragOwnership.HoverPending; folderPreview.HideAnimated(); hoverArm.Stop(); hoverArm.Interval = Settings.FolderHoverDelay; hoverArm.Start();
+                    DataStore.LogDrag("POLL_HOVER target=" + target.Name + " delay=" + Settings.FolderHoverDelay);
+                }
+            }
+            else CancelHover();
+        }
 
-            if (source != null && action == Native.WM_MOUSEMOVE)
+        void EndDesktopPointer(Point point)
+        {
+            DesktopItem start = source, target = armedTarget; bool wasDragging = dragging, wasCancelled = dragOwnership == DragOwnership.Cancelled;
+            bool folderReady = wasDragging && dragOwnership == DragOwnership.MergeArmed && target != null && Rectangle.Inflate(target.Bounds, 8, 8).Contains(point);
+            DataStore.LogDrag("POLL_UP commit=" + folderReady + (target == null ? "" : " target=" + target.Name)); ResetDrag();
+            if (!wasDragging)
             {
-                if ((Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) == 0)
-                {
-                    ResetDrag(); return Native.CallNextHookEx(hook, code, message, data);
-                }
-                int thresholdX = Math.Max(2, SystemInformation.DragSize.Width / 2), thresholdY = Math.Max(2, SystemInformation.DragSize.Height / 2);
-                if (!dragging && (Math.Abs(point.X - down.X) >= thresholdX || Math.Abs(point.Y - down.Y) >= thresholdY))
-                {
-                    dragging = true;
-                }
-                if (!dragging) return Native.CallNextHookEx(hook, code, message, data);
-                if (dragOwnership == DragOwnership.MergeArmed)
-                {
-                    // Do not swallow WM_MOUSEMOVE: Explorer keeps its native drag image
-                    // responsive. The mouse-up is still intercepted before a drop can
-                    // reach Explorer. Leaving the target safely returns ownership because
-                    // the OLE loop has not been cancelled yet.
-                    if (armedTarget != null && Rectangle.Inflate(armedTarget.Bounds, 8, 8).Contains(point))
-                    {
-                        if (!folderPreview.Visible) folderPreview.Arm(armedTarget, true);
-                    }
-                    else { armedTarget = null; CancelHover(); }
-                    return Native.CallNextHookEx(hook, code, message, data);
-                }
-                DesktopItem target = Hit(point);
-                if (target != null && target.Path != source.Path)
-                {
-                    if (hoverTarget == null || hoverTarget.Path != target.Path)
-                    {
-                        hoverTarget = target; hoverStarted = Environment.TickCount; dragOwnership = DragOwnership.HoverPending; folderPreview.HideAnimated();
-                        hoverArm.Stop(); hoverArm.Interval = Settings.FolderHoverDelay; hoverArm.Start();
-                        DataStore.LogDrag("HOVER_PENDING target=" + target.Name + " delay=" + Settings.FolderHoverDelay);
-                    }
-                }
-                else CancelHover();
-                return Native.CallNextHookEx(hook, code, message, data);
+                if (start.IsGroup) Queue(delegate { FolderPanel.ShowOrActivate(start.Path, start.Bounds, Settings); });
+                return;
             }
-
-            if (source != null && action == Native.WM_LBUTTONUP)
-            {
-                DesktopItem start = source, target = armedTarget; bool wasDragging = dragging;
-                bool owned = wasDragging && dragOwnership == DragOwnership.MergeArmed;
-                bool folderReady = owned && target != null && Rectangle.Inflate(target.Bounds, 8, 8).Contains(point);
-                DataStore.LogDrag("UP owned=" + owned + " commit=" + folderReady + (target == null ? "" : " target=" + target.Name));
-                if (owned)
-                {
-                    // Cancel Explorer's OLE target immediately before consuming the
-                    // physical mouse-up. Mouse movement stayed native up to this point.
-                    Native.keybd_event(Native.VK_ESCAPE, 0, 0, UIntPtr.Zero);
-                    Native.keybd_event(Native.VK_ESCAPE, 0, Native.KEYEVENTF_KEYUP, UIntPtr.Zero);
-                    IntPtr list = ExplorerDesktop.CachedListView;
-                    if (list != IntPtr.Zero) Native.SendMessage(list, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
-                }
-                source = null; hoverTarget = null; armedTarget = null; dragging = false; dragOwnership = DragOwnership.Windows; hoverArm.Stop(); folderPreview.HideAnimated();
-                if (!wasDragging)
-                {
-                    if (start.IsGroup)
-                    {
-                        // A collection is a virtual tile, not a normal Explorer shortcut.
-                        // Consume this click so Explorer cannot launch a duplicate process;
-                        // the named pipe remains the fallback when cache is not ready yet.
-                        IntPtr list = ExplorerDesktop.CachedListView;
-                        if (list != IntPtr.Zero) Native.SendMessage(list, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
-                        Queue(delegate { FolderPanel.ShowOrActivate(start.Path, start.Bounds, Settings); });
-                        return (IntPtr)1;
-                    }
-                    return Native.CallNextHookEx(hook, code, message, data);
-                }
-                if (folderReady)
-                {
-                    pendingSource = start; pendingTarget = target;
-                    postDrop.Stop(); postDrop.Start();
-                }
-                // When MERGE_ARMED, even a release outside the armed tile is consumed:
-                // Windows can no longer become the target again during this gesture.
-                if (owned) return (IntPtr)1;
-                refreshAfterWindowsDrop.Stop(); refreshAfterWindowsDrop.Start();
-                return Native.CallNextHookEx(hook, code, message, data);
-            }
-            return Native.CallNextHookEx(hook, code, message, data);
+            if (folderReady) { pendingSource = start; pendingTarget = target; postDrop.Stop(); postDrop.Start(); }
+            else if (!wasCancelled) { refreshAfterWindowsDrop.Stop(); refreshAfterWindowsDrop.Start(); }
         }
 
         void Queue(Action action) { pending = action; deferred.Stop(); deferred.Start(); }
@@ -3259,10 +3311,19 @@ namespace DesktopFoldersDirect
         {
             hoverArm.Stop();
             if (source == null || !dragging || dragOwnership != DragOwnership.HoverPending || hoverTarget == null) return;
-            if ((Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) == 0 || !Rectangle.Inflate(hoverTarget.Bounds, 8, 8).Contains(Cursor.Position)) { CancelHover(); return; }
+            if ((Control.MouseButtons & MouseButtons.Left) == 0 || !Rectangle.Inflate(hoverTarget.Bounds, 8, 8).Contains(Cursor.Position)) { CancelHover(); return; }
+            // Cancel Explorer's OLE drag through messages sent only to its Desktop
+            // window. This replaces the former global mouse hook and key injection.
+            IntPtr list = ExplorerDesktop.CachedListView;
+            if (list != IntPtr.Zero)
+            {
+                Native.SendMessage(list, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
+                IntPtr root = Native.GetAncestor(list, Native.GA_ROOT); if (root != IntPtr.Zero) Native.SendMessage(root, Native.WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
+                Native.PostMessage(list, Native.WM_KEYDOWN, (IntPtr)Native.VK_ESCAPE, IntPtr.Zero); Native.PostMessage(list, Native.WM_KEYUP, (IntPtr)Native.VK_ESCAPE, IntPtr.Zero);
+            }
             armedTarget = hoverTarget; dragOwnership = DragOwnership.MergeArmed;
-            folderPreview.Arm(armedTarget, Settings.ReduceMotion);
-            DataStore.LogDrag("MERGE_ARMED target=" + armedTarget.Name + " elapsed=" + unchecked(Environment.TickCount - hoverStarted));
+            folderPreview.Arm(armedTarget, Settings.ReduceMotion || SystemInformation.TerminalServerSession);
+            DataStore.LogDrag("POLL_ARMED target=" + armedTarget.Name + " elapsed=" + unchecked(Environment.TickCount - hoverStarted));
         }
 
         void CommitPendingFolder()
@@ -3351,19 +3412,27 @@ namespace DesktopFoldersDirect
         internal void SaveSettings()
         {
             DataStore.SaveSettings(Settings);
+            SyncStartupRegistration(true);
+        }
+
+        void SyncStartupRegistration(bool showError)
+        {
             try
             {
-                RegistryKey key = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run", true);
-                if (Settings.StartWithWindows) key.SetValue("DesktopFolders", Application.ExecutablePath); else key.DeleteValue("DesktopFolders", false);
-                key.Close();
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+                {
+                    if (key == null) throw new InvalidOperationException("Không thể mở khóa Windows Startup.");
+                    if (Settings.StartWithWindows) key.SetValue("DesktopFolders", "\"" + Application.ExecutablePath + "\" --startup");
+                    else key.DeleteValue("DesktopFolders", false);
+                }
             }
-            catch { MessageBox.Show("Windows không cho phép thay đổi Startup.", "Desktop Folders"); }
+            catch { if (showError) MessageBox.Show("Windows không cho phép thay đổi Startup.", "Desktop Folders"); }
         }
 
         protected override void ExitThreadCore()
         {
             exiting = true;
-            if (scanner != null) scanner.Dispose(); if (hoverArm != null) hoverArm.Dispose(); if (refreshAfterWindowsDrop != null) refreshAfterWindowsDrop.Dispose(); if (commandPump != null) commandPump.Dispose(); if (commandWindow != null) commandWindow.Dispose(); if (hook != IntPtr.Zero) Native.UnhookWindowsHookEx(hook);
+            if (scanner != null) scanner.Dispose(); if (pointerMonitor != null) pointerMonitor.Dispose(); if (hoverArm != null) hoverArm.Dispose(); if (refreshAfterWindowsDrop != null) refreshAfterWindowsDrop.Dispose(); if (commandPump != null) commandPump.Dispose(); if (commandWindow != null) commandWindow.Dispose();
             if (tray != null) { tray.Visible = false; tray.Dispose(); }
             folderPreview.Dispose(); base.ExitThreadCore();
         }
@@ -3424,6 +3493,8 @@ namespace DesktopFoldersDirect
             bool created;
             string requestedGroupId = null;
             if (args != null && args.Length >= 2 && args[0].Equals("--open-group", StringComparison.OrdinalIgnoreCase)) requestedGroupId = args[1];
+            bool startupLaunch = args != null && args.Any(arg => arg.Equals("--startup", StringComparison.OrdinalIgnoreCase));
+            bool showSettingsOnLaunch = !startupLaunch && String.IsNullOrEmpty(requestedGroupId);
             string mutexName = "DesktopFolders.Direct.SingleInstance";
 #if TEST
             mutexName = "DesktopFolders.Direct.TestInstance";
@@ -3432,10 +3503,14 @@ namespace DesktopFoldersDirect
             {
                 if (!created)
                 {
-                    if (!String.IsNullOrEmpty(requestedGroupId) && !SingleInstanceCommandWindow.SendOpenGroup(requestedGroupId)) DataStore.SaveOpenRequest(requestedGroupId);
+                    if (!String.IsNullOrEmpty(requestedGroupId))
+                    {
+                        if (!SingleInstanceCommandWindow.SendOpenGroup(requestedGroupId)) DataStore.SaveOpenRequest(requestedGroupId);
+                    }
+                    else if (showSettingsOnLaunch) SingleInstanceCommandWindow.SendActivate();
                     return;
                 }
-                Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new DirectDesktopController(requestedGroupId));
+                Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new DirectDesktopController(requestedGroupId, showSettingsOnLaunch));
             }
         }
     }

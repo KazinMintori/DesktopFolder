@@ -20,11 +20,11 @@ Drag one Desktop icon onto another, hold for a moment, and they merge into a vir
   still work)                            single tile
 ```
 
-1. A low-level mouse hook watches drag gestures **only** when the Desktop shell is in the foreground — other applications are never affected.
+1. A lightweight timer reads the left-button state only while the pointer is on the foreground Desktop surface. The application installs no global mouse hook.
 2. **Quick drops** (< 280 ms) pass straight through to Windows; the app does not interfere.
-3. **Holding** over a target icon for ~280 ms triggers `MERGE_ARMED`: the app shows a preview overlay while `WM_MOUSEMOVE` keeps flowing to Explorer so the cursor and drag image stay smooth.
-4. On mouse-up, the app sends `Escape` + `WM_CANCELMODE` to cancel Explorer's OLE drag, swallows the release, and commits exactly one collection operation.
-5. Moving away from the target **at any point** cancels the armed state and returns full control to Windows.
+3. **Holding** over a target icon for ~280 ms triggers `MERGE_ARMED`: targeted `WM_CANCELMODE`/Escape window messages cancel Explorer's OLE drag without global input injection, then the preview appears.
+4. Mouse-up is observed through the button state and commits exactly one collection operation; no system mouse event is swallowed.
+5. Moving away before the hold threshold returns full control to Windows. Moving away after arming cancels the merge gesture cleanly.
 
 ## Features
 
@@ -37,6 +37,7 @@ Drag one Desktop icon onto another, hold for a moment, and they merge into a vir
 | **Cross-collection drag** | Drag an item from one open collection directly into another without losing hidden state or attributes. |
 | **Nested collections** | Hold a dragged item over the center of another card to create a child collection, or drag an existing collection into another. Cycles are rejected automatically. |
 | **Direct-grab reordering** | The grabbed card follows the pointer while neighboring cards retarget smoothly; use card edges to reorder and the center hold-zone to group. |
+| **Nebula glass interface** | The panel embeds `CollectionBackground.png`, bottom-anchors its purple nebula artwork, and uses true blue→purple neon gradients for the title, search border, selected toolbar control, window edge, and translucent icon cards. |
 | **Immediate context menu** | Right-click opens the collection actions immediately; the full Explorer extension menu remains available under “Tùy chọn Windows…”. |
 | **Collision-free restore** | Items moved out or restored from a dissolved collection are placed sequentially into the nearest free Desktop grid slots through the supported Shell `IFolderView` API, and the removed tile disappears without a manual refresh. |
 | **Auto-dissolve** | When a group has only one item left, it automatically dissolves back to a standalone icon (configurable). |
@@ -56,17 +57,18 @@ DesktopFolders **never** creates real folders or moves files. When an item enter
 
 ## Performance
 
-- The mouse hook only fires when the Desktop Explorer (`Progman` → `SHELLDLL_DefView` → `SysListView32`) is in the foreground.
+- Pointer monitoring is read-only and ignores every location outside the foreground Desktop Explorer (`Progman` → `SHELLDLL_DefView` → `SysListView32`).
 - UI Automation scans run every 1.2 s while the Desktop is active; when another app is in the foreground, the timer increments an inactivity counter and after ~12 s calls `EmptyWorkingSet` to release unused memory.
 - Desktop cache refresh after a quick Windows drop uses a dedicated 450 ms timer so icon positions stay accurate without continuous lag.
 - Path notifications use per-file `SHCNE_ATTRIBUTES`, `SHCNE_UPDATEITEM`, and `SHCNE_DELETE` events — never `UPDATEDIR` broadcasts — so restored/removed icons update immediately without disturbing unrelated icons.
 - Desktop positioning uses `IFolderView::SelectAndPositionItems`; the application does not open or write Explorer process memory.
+- Hover, preview, morph, and reorder motion use elapsed-time or critically damped updates, so missed frames catch up instead of changing animation speed. Remote Desktop sessions automatically use the reduced-motion path.
 - Measured on the dev machine: **0.0 s CPU** over 8 s when Desktop is not in the foreground; private bytes ~38 MB, resident working set drops to ~4 MB after idle trim.
 
 ## Installation
 
 1. Download [`DesktopFolders.exe`](DesktopFolders.exe) from this repository.
-2. Run the EXE — it appears in the system tray.
+2. Run the EXE — the Settings window opens immediately and the app remains available in the system tray.
 3. Drag one Desktop icon onto another and hold ~280 ms to create your first collection.
 
 > [!NOTE]
@@ -74,7 +76,7 @@ DesktopFolders **never** creates real folders or moves files. When an item enter
 
 ## Settings
 
-Right-click the tray icon → **Settings**, or double-click the tray icon.
+Run the EXE again, right-click the tray icon → **Settings**, or double-click the tray icon. A second launch activates the existing instance instead of silently exiting. Windows startup uses `--startup`, so it remains unobtrusive after sign-in.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -107,7 +109,7 @@ The entire application is a single C# file compiled to a WinForms executable wit
 ```
 DirectDesktopFolders.cs          Entire application source (~3 000 lines)
 ├─ Program                       Entry point, single-instance mutex, --open-group CLI
-├─ DirectDesktopController       ApplicationContext: tray, mouse hook, drag state machine,
+├─ DirectDesktopController       ApplicationContext: tray, safe pointer monitor, drag state machine,
 │                                Desktop scan timer, IPC command window
 ├─ FolderPanel                   Collection popup form: UI, drag-in/out, rename, search,
 │                                reorder, nested collections, transfer, dissolve
@@ -131,6 +133,7 @@ DesktopFolders.exe               Release binary
 release/DesktopFolders.exe       Mirrored release binary
 DesktopFolders-source.zip        Source code archive
 DesktopFolders.png               Canonical app icon (128×128 PNG)
+CollectionBackground.png         Embedded collection-panel background artwork
 DesktopFolders.ico               ICO generated from the canonical PNG
 build.ps1 / generate-icon.ps1    Reproducible build and icon scripts
 README.md                       This file (English)
@@ -145,4 +148,4 @@ README-DesktopFolders.txt        Detailed documentation (Vietnamese)
 
 ## IPC & single instance
 
-The app uses a named `Mutex` for single-instance enforcement. When a second process launches with `--open-group <id>`, it sends the group ID via `WM_COPYDATA` to the running instance's hidden command window. If the command window is not yet ready (early startup), a file-based fallback writes a `.request` file that the main process polls. Open requests are coalesced by group ID so rapid duplicate launches never create duplicate popups.
+The app uses a named `Mutex` for single-instance enforcement. When a second process launches normally, it sends an activation command via `WM_COPYDATA` so the existing process shows Settings. A launch with `--open-group <id>` sends the group ID through the same hidden command window. If the command window is not yet ready (early startup), group-open requests use a file-based fallback that the main process polls. Requests are coalesced by group ID so rapid duplicate launches never create duplicate popups.
