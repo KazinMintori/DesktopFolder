@@ -1724,7 +1724,10 @@ namespace DesktopFoldersDirect
 #if TRACE_DRAG
             ShowInTaskbar = true;
 #endif
-            Rectangle work = Screen.FromRectangle(source).WorkingArea;
+            Screen sourceScreen = Screen.FromRectangle(source);
+            if (sourceScreen == null && source.Width > 0 && source.Height > 0) sourceScreen = Screen.FromPoint(new Point(source.Left + source.Width / 2, source.Top + source.Height / 2));
+            if (sourceScreen == null) sourceScreen = Screen.PrimaryScreen;
+            Rectangle work = sourceScreen != null ? sourceScreen.WorkingArea : new Rectangle(0, 0, 1920, 1080);
             compactSize = new Size(Math.Min(compactSize.Width, Math.Max(360, work.Width - 30)), Math.Min(compactSize.Height, Math.Max(420, work.Height - 30)));
             expandedSize = new Size(Math.Min(expandedSize.Width, Math.Max(compactSize.Width, work.Width - 30)), Math.Min(expandedSize.Height, Math.Max(compactSize.Height, work.Height - 30)));
             finalSize = compactSize;
@@ -1878,7 +1881,8 @@ namespace DesktopFoldersDirect
         {
             if (IsDisposed || source.Width <= 0 || source.Height <= 0) return;
             CancelActiveMorph(); anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5);
-            Rectangle work = Screen.FromRectangle(source).WorkingArea;
+            Screen sourceScreen = Screen.FromRectangle(source);
+            Rectangle work = sourceScreen != null ? sourceScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
             Point location = FindOpenLocation(CalculateAnchoredLocation(source, finalSize, work), finalSize, work, this);
             // The popup is always committed to its current tile anchor before the
             // first visible frame. Never animate a previously cached form position.
@@ -1894,13 +1898,16 @@ namespace DesktopFoldersDirect
                     FolderPanel panel = reference.Target as FolderPanel; if (panel != null && !panel.IsDisposed && panel.Visible && !Object.ReferenceEquals(panel, ignored)) occupied.Add(panel.Bounds);
                 }
             }
+            Screen screen = Screen.FromPoint(desired);
+            if (screen == null) screen = Screen.FromRectangle(new Rectangle(desired, size));
+            Rectangle targetWork = screen != null ? screen.WorkingArea : (!work.IsEmpty ? work : Screen.PrimaryScreen.WorkingArea);
             List<Point> candidates = new List<Point> { desired, new Point(desired.X + 30, desired.Y + 30), new Point(desired.X - 30, desired.Y + 30), new Point(desired.X + 60, desired.Y + 54), new Point(desired.X - 60, desired.Y + 54), new Point(desired.X + 54, desired.Y - 42), new Point(desired.X - 54, desired.Y - 42) };
             Point best = desired; long bestScore = Int64.MaxValue;
             foreach (Point raw in candidates)
             {
-                Point candidate = new Point(Math.Max(work.Left + 15, Math.Min(raw.X, work.Right - size.Width - 15)), Math.Max(work.Top + 15, Math.Min(raw.Y, work.Bottom - size.Height - 15)));
+                Point candidate = new Point(Math.Max(targetWork.Left + 15, Math.Min(raw.X, targetWork.Right - size.Width - 15)), Math.Max(targetWork.Top + 15, Math.Min(raw.Y, targetWork.Bottom - size.Height - 15)));
                 Rectangle bounds = new Rectangle(candidate, size); long overlap = 0;
-                foreach (Rectangle other in occupied) { Rectangle intersection = Rectangle.Intersect(bounds, other); overlap += (long)intersection.Width * intersection.Height; }
+                foreach (Rectangle other in occupied) { Rectangle intersection = Rectangle.Intersect(bounds, other); if (intersection.Width > 0 && intersection.Height > 0) overlap += (long)intersection.Width * intersection.Height; }
                 long distance = Math.Abs(candidate.X - desired.X) + Math.Abs(candidate.Y - desired.Y); long score = overlap + distance * 300L;
                 if (score < bestScore) { bestScore = score; best = candidate; }
             }
@@ -1911,7 +1918,9 @@ namespace DesktopFoldersDirect
             if (IsDisposed || !IsHandleCreated || updated.Width <= 0 || updated.Height <= 0) return;
             BeginInvoke(new Action(delegate {
                 if (IsDisposed) return; anchorBounds = updated; animationOrigin = Rectangle.Inflate(updated, -5, -5);
-                Rectangle work = Screen.FromRectangle(updated).WorkingArea; Point location = FindOpenLocation(CalculateAnchoredLocation(updated, finalSize, work), finalSize, work, this);
+                Screen sourceScreen = Screen.FromRectangle(updated);
+                Rectangle work = sourceScreen != null ? sourceScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
+                Point location = FindOpenLocation(CalculateAnchoredLocation(updated, finalSize, work), finalSize, work, this);
                 if (Math.Abs(location.X - Left) <= 2 && Math.Abs(location.Y - Top) <= 2) return;
                 Bounds = new Rectangle(location, finalSize); finalLocation = location;
             }));
@@ -1919,15 +1928,97 @@ namespace DesktopFoldersDirect
         static Point CalculateAnchoredLocation(Rectangle anchor, Size size, Rectangle work)
         {
             const int edge = 12, gap = 10;
-            int x = Math.Max(work.Left + edge, Math.Min(anchor.Left, work.Right - size.Width - edge));
-            int below = anchor.Bottom + gap, above = anchor.Top - size.Height - gap;
-            if (below + size.Height <= work.Bottom - edge) return new Point(x, below);
-            if (above >= work.Top + edge) return new Point(x, above);
-            int centeredY = Math.Max(work.Top + edge, Math.Min(anchor.Top + (anchor.Height - size.Height) / 2, work.Bottom - size.Height - edge));
-            int right = anchor.Right + gap, left = anchor.Left - size.Width - gap;
-            if (right + size.Width <= work.Right - edge) return new Point(right, centeredY);
-            if (left >= work.Left + edge) return new Point(left, centeredY);
-            return new Point(x, centeredY);
+            Screen anchorScreen = Screen.FromRectangle(anchor);
+            if (anchorScreen == null && anchor.Width > 0 && anchor.Height > 0) anchorScreen = Screen.FromPoint(new Point(anchor.Left + anchor.Width / 2, anchor.Top + anchor.Height / 2));
+            if (anchorScreen == null && !work.IsEmpty) anchorScreen = Screen.FromRectangle(work);
+            if (anchorScreen == null) anchorScreen = Screen.PrimaryScreen;
+            Rectangle anchorWork = anchorScreen != null ? anchorScreen.WorkingArea : (!work.IsEmpty ? work : new Rectangle(0, 0, 1920, 1080));
+            Screen[] screens = Screen.AllScreens;
+
+            if (screens == null || screens.Length <= 1)
+            {
+                int x = Math.Max(anchorWork.Left + edge, Math.Min(anchor.Left, anchorWork.Right - size.Width - edge));
+                int below = anchor.Bottom + gap, above = anchor.Top - size.Height - gap;
+                if (below + size.Height <= anchorWork.Bottom - edge) return new Point(x, below);
+                if (above >= anchorWork.Top + edge) return new Point(x, above);
+                int centeredY = Math.Max(anchorWork.Top + edge, Math.Min(anchor.Top + (anchor.Height - size.Height) / 2, anchorWork.Bottom - size.Height - edge));
+                int right = anchor.Right + gap, left = anchor.Left - size.Width - gap;
+                if (right + size.Width <= anchorWork.Right - edge) return new Point(right, centeredY);
+                if (left >= anchorWork.Left + edge) return new Point(left, centeredY);
+                return new Point(x, centeredY);
+            }
+
+            int ax = Math.Max(anchorWork.Left + edge, Math.Min(anchor.Left, anchorWork.Right - size.Width - edge));
+            int aBelow = anchor.Bottom + gap;
+            if (aBelow + size.Height <= anchorWork.Bottom - edge && aBelow >= anchorWork.Top + edge) return new Point(ax, aBelow);
+            int aAbove = anchor.Top - size.Height - gap;
+            if (aAbove >= anchorWork.Top + edge && aAbove + size.Height <= anchorWork.Bottom - edge) return new Point(ax, aAbove);
+            int aCenteredY = Math.Max(anchorWork.Top + edge, Math.Min(anchor.Top + (anchor.Height - size.Height) / 2, anchorWork.Bottom - size.Height - edge));
+            int aRight = anchor.Right + gap;
+            if (aRight + size.Width <= anchorWork.Right - edge && aRight >= anchorWork.Left + edge) return new Point(aRight, aCenteredY);
+            int aLeft = anchor.Left - size.Width - gap;
+            if (aLeft >= anchorWork.Left + edge && aLeft + size.Width <= anchorWork.Right - edge) return new Point(aLeft, aCenteredY);
+
+            List<Rectangle> candidates = new List<Rectangle>();
+            Point anchorCenter = new Point(anchor.Left + anchor.Width / 2, anchor.Top + anchor.Height / 2);
+            List<Screen> otherScreens = screens.Where(s => anchorScreen == null || !s.DeviceName.Equals(anchorScreen.DeviceName, StringComparison.OrdinalIgnoreCase))
+                                               .OrderBy(s => {
+                                                   int dx = Math.Max(0, Math.Max(s.WorkingArea.Left - anchorCenter.X, anchorCenter.X - s.WorkingArea.Right));
+                                                   int dy = Math.Max(0, Math.Max(s.WorkingArea.Top - anchorCenter.Y, anchorCenter.Y - s.WorkingArea.Bottom));
+                                                   return dx * dx + dy * dy;
+                                               }).ToList();
+
+            foreach (Screen s in otherScreens)
+            {
+                Rectangle sw = s.WorkingArea;
+                int sRightX = anchor.Right + gap;
+                int sRightY = Math.Max(sw.Top + edge, Math.Min(anchor.Top + (anchor.Height - size.Height) / 2, sw.Bottom - size.Height - edge));
+                Rectangle sRight = new Rectangle(sRightX, sRightY, size.Width, size.Height);
+                if (sRight.Left >= sw.Left + edge && sRight.Right <= sw.Right - edge && sRight.Top >= sw.Top + edge && sRight.Bottom <= sw.Bottom - edge) return sRight.Location;
+                candidates.Add(sRight);
+
+                int sLeftX = anchor.Left - size.Width - gap;
+                int sLeftY = Math.Max(sw.Top + edge, Math.Min(anchor.Top + (anchor.Height - size.Height) / 2, sw.Bottom - size.Height - edge));
+                Rectangle sLeft = new Rectangle(sLeftX, sLeftY, size.Width, size.Height);
+                if (sLeft.Left >= sw.Left + edge && sLeft.Right <= sw.Right - edge && sLeft.Top >= sw.Top + edge && sLeft.Bottom <= sw.Bottom - edge) return sLeft.Location;
+                candidates.Add(sLeft);
+
+                int sBelowX = Math.Max(sw.Left + edge, Math.Min(anchor.Left, sw.Right - size.Width - edge));
+                int sBelowY = anchor.Bottom + gap;
+                Rectangle sBelow = new Rectangle(sBelowX, sBelowY, size.Width, size.Height);
+                if (sBelow.Left >= sw.Left + edge && sBelow.Right <= sw.Right - edge && sBelow.Top >= sw.Top + edge && sBelow.Bottom <= sw.Bottom - edge) return sBelow.Location;
+                candidates.Add(sBelow);
+
+                int sAboveX = Math.Max(sw.Left + edge, Math.Min(anchor.Left, sw.Right - size.Width - edge));
+                int sAboveY = anchor.Top - size.Height - gap;
+                Rectangle sAbove = new Rectangle(sAboveX, sAboveY, size.Width, size.Height);
+                if (sAbove.Left >= sw.Left + edge && sAbove.Right <= sw.Right - edge && sAbove.Top >= sw.Top + edge && sAbove.Bottom <= sw.Bottom - edge) return sAbove.Location;
+                candidates.Add(sAbove);
+            }
+
+            candidates.Add(new Rectangle(ax, aBelow, size.Width, size.Height));
+            candidates.Add(new Rectangle(ax, aAbove, size.Width, size.Height));
+            candidates.Add(new Rectangle(aRight, aCenteredY, size.Width, size.Height));
+            candidates.Add(new Rectangle(aLeft, aCenteredY, size.Width, size.Height));
+            candidates.Add(new Rectangle(ax, aCenteredY, size.Width, size.Height));
+
+            Rectangle bestCandidate = candidates[0];
+            long minScore = Int64.MaxValue;
+            long totalArea = (long)size.Width * size.Height;
+            foreach (Rectangle cand in candidates)
+            {
+                long visibleArea = 0;
+                foreach (Screen s in screens)
+                {
+                    Rectangle inter = Rectangle.Intersect(cand, s.WorkingArea);
+                    if (inter.Width > 0 && inter.Height > 0) visibleArea += (long)inter.Width * inter.Height;
+                }
+                long clippedArea = Math.Max(0, totalArea - visibleArea);
+                long dist = Math.Abs(cand.Left - anchor.Left) + Math.Abs(cand.Top - anchor.Top);
+                long score = clippedArea * 1000L + dist;
+                if (score < minScore) { minScore = score; bestCandidate = cand; }
+            }
+            return bestCandidate.Location;
         }
         void BeginTitleEdit() { titleEditor.Text = group.Name; titleLabel.Visible = false; titleEditor.Visible = true; titleEditor.Focus(); titleEditor.SelectAll(); }
         void EndTitleEdit(bool keepText) { if (!keepText) titleEditor.Text = group.Name; titleEditor.Visible = false; titleLabel.Visible = true; }
@@ -2221,12 +2312,12 @@ namespace DesktopFoldersDirect
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
             VirtualMember member = group.Members.FirstOrDefault(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
-            List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group);
+            List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group, this);
             try { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); ExplorerDesktop.NotifyPathChanged(member.Path); }
             catch (Exception e) { try { File.SetAttributes(member.Path, File.GetAttributes(member.Path) | FileAttributes.Hidden); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, "Desktop Folders"); return; }
             if (settings.DissolveSingleAppGroup && group.Members.Count <= 1)
             {
-                List<string> affected = DissolveGroupRecord(layout, group); DataStore.SaveVirtualLayout(layout);
+                List<string> affected = DissolveGroupRecord(layout, group, this); DataStore.SaveVirtualLayout(layout);
                 foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(layout, affectedId);
                 ExplorerDesktop.QueuePlacement(member.Path, preferredPlacement); NotifyLayoutChanged(); Close();
             }
@@ -2235,13 +2326,13 @@ namespace DesktopFoldersDirect
         void DissolveGroup()
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
-            List<string> affected = DissolveGroupRecord(layout, group); DataStore.SaveVirtualLayout(layout);
+            List<string> affected = DissolveGroupRecord(layout, group, this); DataStore.SaveVirtualLayout(layout);
             foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(layout, affectedId);
             NotifyLayoutChanged(); Close();
         }
-        static List<string> DissolveGroupRecord(VirtualLayout current, VirtualGroup dissolving)
+        static List<string> DissolveGroupRecord(VirtualLayout current, VirtualGroup dissolving, FolderPanel panel = null)
         {
-            List<string> affected = new List<string>(); List<VirtualMember> desktopRestores = new List<VirtualMember>(); List<VirtualGroup> parents = VirtualLayoutGraph.ParentsOf(current, dissolving.Id); Point preferredPlacement = PreferredDesktopPoint(dissolving);
+            List<string> affected = new List<string>(); List<VirtualMember> desktopRestores = new List<VirtualMember>(); List<VirtualGroup> parents = VirtualLayoutGraph.ParentsOf(current, dissolving.Id); Point preferredPlacement = PreferredDesktopPoint(dissolving, panel);
             if (parents.Count == 0)
             {
                 foreach (VirtualMember remaining in dissolving.Members) try { if (File.Exists(remaining.Path)) { File.SetAttributes(remaining.Path, (FileAttributes)remaining.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(remaining.Path); desktopRestores.Add(remaining); } } catch { }
@@ -2267,11 +2358,43 @@ namespace DesktopFoldersDirect
             foreach (VirtualMember restored in desktopRestores) ExplorerDesktop.QueuePlacement(restored.Path, preferredPlacement);
             current.Groups.Remove(dissolving); return affected;
         }
-        static Point PreferredDesktopPoint(VirtualGroup sourceGroup)
+        static Point PreferredDesktopPoint(VirtualGroup sourceGroup, FolderPanel panel = null)
         {
             Point pointer = Cursor.Position; if (ExplorerDesktop.IsPointOnDesktopSurface(pointer)) return pointer;
-            Rectangle tileBounds; if (sourceGroup != null && ExplorerDesktop.TryGetIconBounds(sourceGroup.TilePath, out tileBounds)) return new Point(tileBounds.Left + tileBounds.Width / 2, tileBounds.Top + tileBounds.Height / 2);
-            Rectangle work = Screen.PrimaryScreen.WorkingArea; return new Point(work.Left + 48, work.Top + 48);
+            Rectangle tileBounds;
+            if (sourceGroup != null && !String.IsNullOrEmpty(sourceGroup.TilePath) && ExplorerDesktop.TryGetIconBounds(sourceGroup.TilePath, out tileBounds) && tileBounds.Width > 0 && tileBounds.Height > 0)
+                return new Point(tileBounds.Left + tileBounds.Width / 2, tileBounds.Top + tileBounds.Height / 2);
+            if (panel == null && sourceGroup != null)
+            {
+                lock (OpenPanelsLock)
+                {
+                    WeakReference wr;
+                    if (OpenPanels.TryGetValue(sourceGroup.Id, out wr) && wr != null) panel = wr.Target as FolderPanel;
+                }
+            }
+            Screen monitor = null;
+            if (panel != null && !panel.IsDisposed && panel.Visible)
+            {
+                monitor = Screen.FromControl(panel);
+                if (monitor == null) monitor = Screen.FromRectangle(panel.Bounds);
+            }
+            if (monitor == null && sourceGroup != null && !String.IsNullOrEmpty(sourceGroup.TilePath) && ExplorerDesktop.TryGetIconBounds(sourceGroup.TilePath, out tileBounds))
+            {
+                monitor = Screen.FromRectangle(tileBounds);
+            }
+            if (monitor == null) monitor = Screen.FromPoint(pointer);
+            if (monitor != null)
+            {
+                Rectangle work = monitor.WorkingArea;
+                return new Point(work.Left + 48, work.Top + 48);
+            }
+            Screen primary = Screen.PrimaryScreen;
+            if (primary != null)
+            {
+                Rectangle work = primary.WorkingArea;
+                return new Point(work.Left + 48, work.Top + 48);
+            }
+            return new Point(48, 48);
         }
         void RenameGroup(string value)
         {
@@ -2311,7 +2434,7 @@ namespace DesktopFoldersDirect
             if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.", "Desktop Folders"); return false; }
             from.Members.Remove(member); from.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); to.Members.Add(member);
             bool dissolveSource = settings.DissolveSingleAppGroup && from.Members.Count <= 1;
-            List<string> affected = dissolveSource ? DissolveGroupRecord(latest, from) : new List<string>();
+            List<string> affected = dissolveSource ? DissolveGroupRecord(latest, from, this) : new List<string>();
             DataStore.SaveVirtualLayout(latest); VirtualLayoutGraph.RefreshGroupAndAncestors(latest, to.Id);
             if (dissolveSource)
             {
