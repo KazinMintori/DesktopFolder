@@ -31,12 +31,18 @@ if ($windowsRuntime -and $systemRuntime -and $numericsRuntime -and $vectorsRunti
 
 if (-not (Test-Path -LiteralPath $compiler)) { throw "Không tìm thấy .NET Framework C# compiler: $compiler" }
 if (-not (Test-Path -LiteralPath $backgroundAsset)) { throw "Thiếu CollectionBackground.png" }
+$stringsEn = Join-Path $PSScriptRoot "Resources\strings.en.json"
+$stringsVi = Join-Path $PSScriptRoot "Resources\strings.vi.json"
+if (-not (Test-Path -LiteralPath $stringsEn)) { throw "Thiếu Resources\strings.en.json" }
+if (-not (Test-Path -LiteralPath $stringsVi)) { throw "Thiếu Resources\strings.vi.json" }
 if (-not (Test-Path -LiteralPath ".\DesktopFolders.ico")) {
     if (-not (Test-Path -LiteralPath ".\generate-icon.ps1")) { throw "Thiếu DesktopFolders.ico và generate-icon.ps1" }
     & ".\generate-icon.ps1"
 }
 $arguments = @("/nologo", "/target:winexe", "/optimize+", "/platform:anycpu", "/win32icon:DesktopFolders.ico", "/out:$Output")
 $arguments += "/resource:$backgroundAsset,DesktopFolders.CollectionBackground.png"
+$arguments += "/resource:$stringsEn,DesktopFolders.Resources.strings.en.json"
+$arguments += "/resource:$stringsVi,DesktopFolders.Resources.strings.vi.json"
 $symbols = @()
 if ($TraceDrag) { $symbols += "TRACE_DRAG" }
 if ($TestBuild) { $symbols += "TEST" }

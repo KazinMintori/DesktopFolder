@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -46,6 +47,7 @@ namespace DesktopFoldersDirect
         public bool ReduceMotion;
         public bool DissolveSingleAppGroup = true;
         public int FolderHoverDelay = 280;
+        public string Language = "system";
     }
 
     internal sealed class VirtualMember
@@ -81,6 +83,141 @@ namespace DesktopFoldersDirect
         public List<VirtualGroup> Groups = new List<VirtualGroup>();
     }
 
+    internal static class Loc
+    {
+        static readonly object syncLock = new object();
+        static string configuredLanguage = "system";
+        static string effectiveLanguage = "en";
+        static Dictionary<string, string> currentStrings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        static Dictionary<string, string> fallbackStrings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
+
+        static Loc()
+        {
+            SetLanguage("system");
+        }
+
+        internal static string ConfiguredLanguage { get { lock (syncLock) { return configuredLanguage; } } }
+        internal static string EffectiveLanguage { get { lock (syncLock) { return effectiveLanguage; } } }
+
+        internal static void SetLanguage(string lang)
+        {
+            lock (syncLock)
+            {
+                configuredLanguage = String.IsNullOrEmpty(lang) ? "system" : lang.Trim().ToLowerInvariant();
+                string resolved = configuredLanguage;
+                if (resolved == "system")
+                {
+                    try
+                    {
+                        CultureInfo ci = CultureInfo.CurrentUICulture;
+                        if (ci != null && ci.Name.StartsWith("vi", StringComparison.OrdinalIgnoreCase))
+                            resolved = "vi";
+                        else
+                            resolved = "en";
+                    }
+                    catch
+                    {
+                        resolved = "en";
+                    }
+                }
+                else if (resolved != "vi" && resolved != "en")
+                {
+                    resolved = "en";
+                }
+
+                effectiveLanguage = resolved;
+                fallbackStrings = LoadDictionary("en");
+                if (effectiveLanguage == "en")
+                {
+                    currentStrings = fallbackStrings;
+                }
+                else
+                {
+                    currentStrings = LoadDictionary(effectiveLanguage);
+                }
+            }
+        }
+
+        static Dictionary<string, string> LoadDictionary(string lang)
+        {
+            string content = null;
+            try
+            {
+                string p1 = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "strings." + lang + ".json");
+                string p2 = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "strings." + lang + ".json");
+                if (File.Exists(p1)) content = File.ReadAllText(p1, Encoding.UTF8);
+                else if (File.Exists(p2)) content = File.ReadAllText(p2, Encoding.UTF8);
+            }
+            catch { }
+
+            if (content == null)
+            {
+                try
+                {
+                    string res = "DesktopFolders.Resources.strings." + lang + ".json";
+                    using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(res))
+                    {
+                        if (stream != null)
+                        {
+                            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                                content = reader.ReadToEnd();
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (!String.IsNullOrEmpty(content))
+            {
+                try
+                {
+                    Dictionary<string, object> raw = Serializer.Deserialize<Dictionary<string, object>>(content);
+                    if (raw != null)
+                    {
+                        Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (KeyValuePair<string, object> pair in raw)
+                        {
+                            if (pair.Value != null) result[pair.Key] = pair.Value.ToString();
+                        }
+                        return result;
+                    }
+                }
+                catch { }
+            }
+
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        internal static string Get(string key)
+        {
+            if (key == null) return "";
+            string val;
+            lock (syncLock)
+            {
+                if (currentStrings.TryGetValue(key, out val) && !String.IsNullOrEmpty(val))
+                    return val;
+                if (fallbackStrings.TryGetValue(key, out val) && !String.IsNullOrEmpty(val))
+                    return val;
+            }
+            return key;
+        }
+
+        internal static string Get(string key, params object[] args)
+        {
+            string format = Get(key);
+            if (args == null || args.Length == 0) return format;
+            try
+            {
+                return String.Format(format, args);
+            }
+            catch
+            {
+                return format;
+            }
+        }
+    }
+
     internal static class DataStore
     {
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
@@ -97,11 +234,19 @@ namespace DesktopFoldersDirect
                 if (File.Exists(SettingsPath))
                 {
                     AppSettings loaded = Json.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
-                    if (loaded != null) { loaded.FolderHoverDelay = Math.Max(120, Math.Min(800, loaded.FolderHoverDelay)); return loaded; }
+                    if (loaded != null)
+                    {
+                        loaded.FolderHoverDelay = Math.Max(120, Math.Min(800, loaded.FolderHoverDelay));
+                        if (String.IsNullOrEmpty(loaded.Language)) loaded.Language = "system";
+                        Loc.SetLanguage(loaded.Language);
+                        return loaded;
+                    }
                 }
             }
             catch { }
-            return new AppSettings();
+            AppSettings defaults = new AppSettings();
+            Loc.SetLanguage(defaults.Language);
+            return defaults;
         }
 
         internal static void SaveSettings(AppSettings settings)
@@ -858,7 +1003,7 @@ namespace DesktopFoldersDirect
             try
             {
                 IntPtr listHandle = GetListView();
-                if (listHandle == IntPtr.Zero) { ScanStatus = "Không tìm thấy SysListView32 của Desktop Explorer"; return result.ToArray(); }
+                if (listHandle == IntPtr.Zero) { ScanStatus = Loc.Get("diagnostics.no_syslistview"); return result.ToArray(); }
                 cachedListView = listHandle;
                 AutomationElement list = AutomationElement.FromHandle(listHandle);
                 AutomationElementCollection children = list.FindAll(TreeScope.Children, Condition.TrueCondition);
@@ -885,11 +1030,11 @@ namespace DesktopFoldersDirect
                         IsShortcut = !isShellObject && isMergeable
                     });
                 }
-                ScanStatus = "Explorer: " + children.Count + " icon | Nhận diện: " + result.Count + " | Chưa hỗ trợ: " + (children.Count - result.Count) +
+                ScanStatus = Loc.Get("diagnostics.scan_summary", children.Count, result.Count, (children.Count - result.Count)) +
                     "\r\nDesktop roots: " + String.Join(" ; ", DesktopRoots) +
-                    (unsupported.Count == 0 ? "" : "\r\nVí dụ chưa hỗ trợ: " + String.Join(", ", unsupported.ToArray()));
+                    (unsupported.Count == 0 ? "" : Loc.Get("diagnostics.unsupported_examples", String.Join(", ", unsupported.ToArray())));
             }
-            catch (Exception error) { ScanStatus = "Lỗi quét Desktop: " + error.Message; }
+            catch (Exception error) { ScanStatus = Loc.Get("diagnostics.scan_error", error.Message); }
             return result.ToArray();
         }
 
@@ -924,8 +1069,9 @@ namespace DesktopFoldersDirect
 
         internal static string NewGroupName()
         {
-            string name = "New Folder"; int number = 2;
-            while (File.Exists(Path.Combine(Desktop, name + ".lnk")) || File.Exists(Path.Combine(Desktop, name + ".desktopgroup")) || Directory.Exists(Path.Combine(Desktop, name))) name = "New Folder (" + number++ + ")";
+            string baseName = Loc.Get("collection.default_name");
+            string name = baseName; int number = 2;
+            while (File.Exists(Path.Combine(Desktop, name + ".lnk")) || File.Exists(Path.Combine(Desktop, name + ".desktopgroup")) || Directory.Exists(Path.Combine(Desktop, name))) name = Loc.Get("collection.default_numbered_name", number++);
             return name;
         }
     }
@@ -1279,8 +1425,8 @@ namespace DesktopFoldersDirect
                 Guid folderId = typeof(IShellFolderNative).GUID; IntPtr child; if (SHBindToParent(absolute, ref folderId, out parent, out child) < 0 || parent == null) throw new InvalidOperationException("Shell parent unavailable.");
                 Guid contextId = typeof(IContextMenuNative).GUID; if (parent.GetUIObjectOf(owner.Handle, 1, new IntPtr[] { child }, ref contextId, IntPtr.Zero, out rawContext) < 0 || rawContext == null) throw new InvalidOperationException("Shell context menu unavailable.");
                 IContextMenuNative context = (IContextMenuNative)rawContext; menu = CreatePopupMenu(); if (menu == IntPtr.Zero) throw new InvalidOperationException("Popup menu unavailable.");
-                InsertMenu(menu, 0, MfByPosition | MfString, (UIntPtr)PinCommand, pinText); InsertMenu(menu, 1, MfByPosition | MfString, (UIntPtr)MoveOutCommand, "Đưa ra Desktop");
-                InsertMenu(menu, 2, MfByPosition | MfSeparator, UIntPtr.Zero, null); InsertMenu(menu, 3, MfByPosition | MfString, (UIntPtr)MoveBeforeCommand, "Di chuyển về trước"); InsertMenu(menu, 4, MfByPosition | MfString, (UIntPtr)MoveAfterCommand, "Di chuyển về sau"); InsertMenu(menu, 5, MfByPosition | MfSeparator, UIntPtr.Zero, null);
+                InsertMenu(menu, 0, MfByPosition | MfString, (UIntPtr)PinCommand, pinText); InsertMenu(menu, 1, MfByPosition | MfString, (UIntPtr)MoveOutCommand, Loc.Get("menu.restore_to_desktop"));
+                InsertMenu(menu, 2, MfByPosition | MfSeparator, UIntPtr.Zero, null); InsertMenu(menu, 3, MfByPosition | MfString, (UIntPtr)MoveBeforeCommand, Loc.Get("menu.move_forward")); InsertMenu(menu, 4, MfByPosition | MfString, (UIntPtr)MoveAfterCommand, Loc.Get("menu.move_backward")); InsertMenu(menu, 5, MfByPosition | MfSeparator, UIntPtr.Zero, null);
                 context.QueryContextMenu(menu, 6, ShellFirstCommand, ShellLastCommand, 0);
                 using (ShellMenuMessageWindow messages = new ShellMenuMessageWindow(owner.Handle, rawContext))
                 {
@@ -1305,7 +1451,7 @@ namespace DesktopFoldersDirect
         }
         static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
-            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Di chuyển về trước", null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add("Di chuyển về sau", null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { if (ShellDesktopItems.IsSupported(path)) ShellDesktopItems.Open(path, owner.Handle); else Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
+            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add(Loc.Get("menu.restore_to_desktop"), null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.move_forward"), null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add(Loc.Get("menu.move_backward"), null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.open"), null, delegate { try { if (ShellDesktopItems.IsSupported(path)) ShellDesktopItems.Open(path, owner.Handle); else Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
         }
 
         sealed class ShellMenuMessageWindow : NativeWindow, IDisposable
@@ -1354,7 +1500,7 @@ namespace DesktopFoldersDirect
             ItemPath = path; label = displayName; pinned = isPinned; gridMode = grid; icon = IconLoader.ForIdentity(path);
             reduceMotion = reducedMotion;
             Size = grid ? new Size(width, width < 170 ? 106 : 134) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
-            TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? "Đã ghim ưu tiên" : "";
+            TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? Loc.Get("tile.pinned_accessible") : "";
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         }
         protected override void OnMouseDown(MouseEventArgs e)
@@ -1949,7 +2095,7 @@ namespace DesktopFoldersDirect
             if (group == null) throw new InvalidDataException("Không tìm thấy dữ liệu virtual group.");
             Rectangle live;
             if (ExplorerDesktop.TryGetIconBounds(tilePath, out live)) source = live;
-            groupId = group.Id; anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5); Text = "Desktop Folders — " + group.Name;
+            groupId = group.Id; anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5); Text = Loc.Get("panel.window_title", group.Name);
             FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; TopMost = true; BackColor = CollectionTheme.Background; Padding = new Padding(1); Opacity = 1.0; AllowDrop = true; KeyPreview = true; DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             nestHoverTimer = new System.Windows.Forms.Timer { Interval = settings.FolderHoverDelay }; nestHoverTimer.Tick += delegate { ArmNestHover(); };
@@ -1976,11 +2122,11 @@ namespace DesktopFoldersDirect
             expandButton = HeaderButton(HeaderIconKind.Expand, 32); expandButton.Dock = DockStyle.Right; expandButton.Click += delegate { ToggleExpanded(); };
             listButton = HeaderButton(HeaderIconKind.List, 32); listButton.Dock = DockStyle.Right; listButton.Click += delegate { gridMode = false; UpdateModeButtons(); RenderApps(); };
             gridButton = HeaderButton(HeaderIconKind.Grid, 32); gridButton.Dock = DockStyle.Right; gridButton.Click += delegate { gridMode = true; UpdateModeButtons(); RenderApps(); };
-            close.AccessibleName = "Đóng collection"; expandButton.AccessibleName = "Phóng to collection"; listButton.AccessibleName = "Bố cục danh sách"; gridButton.AccessibleName = "Bố cục lưới";
+            close.AccessibleName = Loc.Get("panel.close_accessible"); expandButton.AccessibleName = Loc.Get("panel.expand_accessible"); listButton.AccessibleName = Loc.Get("panel.list_accessible"); gridButton.AccessibleName = Loc.Get("panel.grid_accessible");
             // Controls dock from the last added element toward the outside edge.
             // Visual order, left-to-right: grid, list, expand, close.
             header.Controls.Add(gridButton); header.Controls.Add(listButton); header.Controls.Add(expandButton); header.Controls.Add(close);
-            tooltips = new ToolTip(); tooltips.SetToolTip(gridButton, "Bố cục lưới"); tooltips.SetToolTip(listButton, "Bố cục danh sách"); tooltips.SetToolTip(expandButton, "Phóng to collection"); tooltips.SetToolTip(close, "Đóng collection");
+            tooltips = new ToolTip(); tooltips.SetToolTip(gridButton, Loc.Get("panel.grid_tooltip")); tooltips.SetToolTip(listButton, Loc.Get("panel.list_tooltip")); tooltips.SetToolTip(expandButton, Loc.Get("panel.expand_tooltip")); tooltips.SetToolTip(close, Loc.Get("panel.close_tooltip"));
 
             Panel content = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
             shell.Controls.Add(content); content.BringToFront();
@@ -1993,8 +2139,8 @@ namespace DesktopFoldersDirect
             header.Resize += delegate { int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; };
 
             RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, BorderColor = CollectionTheme.NeonBlue, BorderEndColor = CollectionTheme.NeonPurple, BorderThickness = 2, ShowSearchGlyph = true, GlyphColor = CollectionTheme.NeonPurple, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = "Tìm trong collection" };
-            searchHint = new Label { Text = "Tìm trong collection…", ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
+            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = Loc.Get("panel.search_accessible") };
+            searchHint = new Label { Text = Loc.Get("panel.search_hint"), ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
             searchHint.Click += delegate { search.Focus(); };
             search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonBlue; searchContainer.Invalidate(); };
             search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonPurple; searchContainer.Invalidate(); };
@@ -2055,7 +2201,7 @@ namespace DesktopFoldersDirect
             expanded = !expanded; Size target = expanded ? expandedSize : compactSize; Rectangle work = Screen.FromControl(this).WorkingArea;
             Point location = FindOpenLocation(CalculateAnchoredLocation(anchorBounds, target, work), target, work, this);
             Rectangle previous = Bounds; finalSize = target; finalLocation = location; Bounds = new Rectangle(location, target); Opacity = 1.0;
-            expandButton.IconKind = expanded ? HeaderIconKind.Collapse : HeaderIconKind.Expand; expandButton.AccessibleName = expanded ? "Thu nhỏ collection" : "Phóng to collection"; tooltips.SetToolTip(expandButton, expanded ? "Thu nhỏ collection" : "Phóng to collection"); RenderApps();
+            expandButton.IconKind = expanded ? HeaderIconKind.Collapse : HeaderIconKind.Expand; expandButton.AccessibleName = expanded ? Loc.Get("panel.collapse_accessible") : Loc.Get("panel.expand_accessible"); tooltips.SetToolTip(expandButton, expanded ? Loc.Get("panel.collapse_tooltip") : Loc.Get("panel.expand_tooltip")); RenderApps();
             Promote(); if (!ReduceMotionNow) StartCompositionCue(previous, Bounds);
         }
 
@@ -2269,7 +2415,7 @@ namespace DesktopFoldersDirect
             int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 24) / 3)) : Math.Max(250, usableWidth - 4);
             int rowWidth = gridMode ? (width + 8) * 3 : width;
             apps.Padding = new Padding(Math.Max(0, (usableWidth - rowWidth) / 2), 0, 0, 0);
-            if (members.Length == 0) apps.Controls.Add(new Label { Text = "Không tìm thấy ứng dụng phù hợp.", ForeColor = CollectionTheme.MutedText, Font = new Font("Segoe UI", 11), AutoSize = true, Margin = new Padding(16) });
+            if (members.Length == 0) apps.Controls.Add(new Label { Text = Loc.Get("panel.search_empty"), ForeColor = CollectionTheme.MutedText, Font = new Font("Segoe UI", 11), AutoSize = true, Margin = new Padding(16) });
             bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
             foreach (VirtualMember member in members)
             {
@@ -2277,7 +2423,7 @@ namespace DesktopFoldersDirect
                 if (!activePinnedSection.HasValue || activePinnedSection.Value != pinned)
                 {
                     if (apps.Controls.Count > 0) apps.SetFlowBreak(apps.Controls[apps.Controls.Count - 1], true);
-                    SectionHeaderControl section = new SectionHeaderControl(pinned ? "Đã ghim" : "Tất cả ứng dụng", pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
+                    SectionHeaderControl section = new SectionHeaderControl(pinned ? Loc.Get("panel.section.pinned") : Loc.Get("panel.section.all_apps"), pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
                     apps.Controls.Add(section); apps.SetFlowBreak(section, true); activePinnedSection = pinned;
                 }
                 AppTile tile = new AppTile(path, displayName, pinned, gridMode, width, ReduceMotionNow) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
@@ -2304,7 +2450,7 @@ namespace DesktopFoldersDirect
                 Action activateItem = delegate {
                     if (childDidDrag) { childDidDrag = false; return; }
                     if (nestedGroup != null) { FolderPanel.ShowOrActivate(nestedGroup.TilePath, tile.RectangleToScreen(tile.ClientRectangle), settings); return; }
-                    try { if (member.IsShellObject) ShellDesktopItems.Open(member.ShellIdentity, Handle); else Process.Start(member.Path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); }
+                    try { if (member.IsShellObject) ShellDesktopItems.Open(member.ShellIdentity, Handle); else Process.Start(member.Path); } catch (Exception e) { MessageBox.Show(e.Message, Loc.Get("app.name")); }
                 };
                 tile.ItemActivated += delegate { activateItem(); };
                 tile.DragEnter += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
@@ -2312,14 +2458,14 @@ namespace DesktopFoldersDirect
                 tile.DragLeave += delegate { tile.SetDragVisual(false, false); };
                 tile.DragDrop += delegate(object sender, DragEventArgs e) { HandleTileDrop(tile, path, pinned, e); };
                 ContextMenuStrip quickMenu = new ContextMenuStrip { ShowImageMargin = false, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 9.5f) };
-                quickMenu.Items.Add(nestedGroup == null ? "Mở" : "Mở collection", null, delegate { activateItem(); });
-                quickMenu.Items.Add(pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", null, delegate { TogglePin(path); });
-                quickMenu.Items.Add("Đưa ra Desktop", null, delegate { AnimateMoveOut(tile, path); });
+                quickMenu.Items.Add(nestedGroup == null ? Loc.Get("menu.open") : Loc.Get("menu.open_collection"), null, delegate { activateItem(); });
+                quickMenu.Items.Add(pinned ? Loc.Get("menu.unpin") : Loc.Get("menu.pin"), null, delegate { TogglePin(path); });
+                quickMenu.Items.Add(Loc.Get("menu.restore_to_desktop"), null, delegate { AnimateMoveOut(tile, path); });
                 quickMenu.Items.Add(new ToolStripSeparator());
-                quickMenu.Items.Add("Di chuyển về trước", null, delegate { MoveMemberBy(path, -1); });
-                quickMenu.Items.Add("Di chuyển về sau", null, delegate { MoveMemberBy(path, 1); });
+                quickMenu.Items.Add(Loc.Get("menu.move_forward"), null, delegate { MoveMemberBy(path, -1); });
+                quickMenu.Items.Add(Loc.Get("menu.move_backward"), null, delegate { MoveMemberBy(path, 1); });
                 quickMenu.Items.Add(new ToolStripSeparator());
-                quickMenu.Items.Add("Tùy chọn Windows…", null, delegate { BeginInvoke(new Action(delegate { if (!IsDisposed) ShellContextMenu.Show(this, path, pinned ? "Bỏ ghim ưu tiên" : "Ghim ưu tiên", delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }, delegate { MoveMemberBy(path, -1); }, delegate { MoveMemberBy(path, 1); }); })); });
+                quickMenu.Items.Add(Loc.Get("menu.windows_options"), null, delegate { BeginInvoke(new Action(delegate { if (!IsDisposed) ShellContextMenu.Show(this, path, pinned ? Loc.Get("menu.unpin") : Loc.Get("menu.pin"), delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }, delegate { MoveMemberBy(path, -1); }, delegate { MoveMemberBy(path, 1); }); })); });
                 tile.SetImmediateContextMenu(quickMenu);
                 apps.Controls.Add(tile);
             }
@@ -2546,7 +2692,7 @@ namespace DesktopFoldersDirect
             VirtualMember member = group.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
             List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group, this);
             try { VirtualMemberState.Restore(member); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); VirtualMemberState.NotifyChanged(member); }
-            catch (Exception e) { try { VirtualMemberState.Hide(member); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, "Desktop Folders"); return; }
+            catch (Exception e) { try { VirtualMemberState.Hide(member); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, Loc.Get("app.name")); return; }
             if (settings.DissolveSingleAppGroup && group.Members.Count <= 1)
             {
                 List<string> affected = DissolveGroupRecord(layout, group, this); DataStore.SaveVirtualLayout(layout);
@@ -2655,7 +2801,7 @@ namespace DesktopFoldersDirect
                 if (!String.IsNullOrEmpty(sourceGroup) && sourceGroup != groupId && TransferMember(sourceGroup, paths[0])) { e.Effect = DragDropEffects.Move; return; }
                 foreach (string path in paths) AddMember(path); e.Effect = DragDropEffects.Link; NotifyLayoutChanged();
             }
-            catch (Exception error) { e.Effect = DragDropEffects.None; MessageBox.Show("Không thể thêm vào collection: " + error.Message, "Desktop Folders"); }
+            catch (Exception error) { e.Effect = DragDropEffects.None; MessageBox.Show(Loc.Get("error.add_to_collection", error.Message), Loc.Get("app.name")); }
         }
         bool TransferMember(string sourceGroupId, string path, string destinationGroupId = null)
         {
@@ -2663,7 +2809,7 @@ namespace DesktopFoldersDirect
             if (from == null || to == null || to.Members.Any(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase))) return false;
             VirtualMember member = from.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return false;
             VirtualGroup nested = VirtualLayoutGraph.ResolveMemberGroup(latest, member);
-            if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.", "Desktop Folders"); return false; }
+            if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show(Loc.Get("error.cycle_detected"), Loc.Get("app.name")); return false; }
             from.Members.Remove(member); from.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); to.Members.Add(member);
             bool dissolveSource = settings.DissolveSingleAppGroup && from.Members.Count <= 1;
             List<string> affected = dissolveSource ? DissolveGroupRecord(latest, from, this) : new List<string>();
@@ -2681,9 +2827,9 @@ namespace DesktopFoldersDirect
             VirtualGroup nested = VirtualLayoutGraph.ResolveTileGroup(layout, path);
             if (nested != null)
             {
-                if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, destination.Id)) throw new InvalidOperationException("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.");
+                if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, destination.Id)) throw new InvalidOperationException(Loc.Get("error.cycle_detected"));
                 VirtualGroup existingParent = VirtualLayoutGraph.ParentsOf(layout, nested.Id).FirstOrDefault();
-                if (existingParent != null) throw new InvalidOperationException("Collection này đã nằm trong \"" + existingParent.Name + "\". Hãy kéo nó trực tiếp từ collection đó để di chuyển.");
+                if (existingParent != null) throw new InvalidOperationException(Loc.Get("error.already_in_parent", existingParent.Name));
             }
             FileAttributes attributes = File.GetAttributes(path); VirtualMember added = new VirtualMember { Path = path, OriginalAttributes = (int)attributes, GroupId = nested == null ? null : nested.Id };
             try { File.SetAttributes(path, attributes | FileAttributes.Hidden); destination.Members.Add(added); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(path); }
@@ -2709,7 +2855,7 @@ namespace DesktopFoldersDirect
             catch (Exception error)
             {
                 try { if (File.Exists(tilePath)) File.Delete(tilePath); } catch { } try { if (!String.IsNullOrEmpty(nested.IconPath) && File.Exists(nested.IconPath)) File.Delete(nested.IconPath); } catch { }
-                MessageBox.Show("Không thể tạo collection lồng: " + error.Message, "Desktop Folders"); return false;
+                MessageBox.Show(Loc.Get("error.create_nested_group", error.Message), Loc.Get("app.name")); return false;
             }
         }
         protected override void WndProc(ref Message message)
@@ -3238,15 +3384,16 @@ namespace DesktopFoldersDirect
         ModernToggleSwitch reduceSwitch;
         ModernToggleSwitch dissolveSwitch;
         ModernSlider delaySlider;
+        ComboBox langCombo;
         Label delayBadge;
         Label targetStatus;
 
         internal SettingsForm(DirectDesktopController owner)
         {
             controller = owner;
-            Text = "Desktop Folders Settings";
+            Text = Loc.Get("settings.window_title");
             StartPosition = FormStartPosition.CenterScreen;
-            Size = new Size(520, 620);
+            Size = new Size(520, 680);
             FormBorderStyle = FormBorderStyle.None;
             BackColor = CollectionTheme.Background;
             ForeColor = CollectionTheme.Text;
@@ -3260,7 +3407,7 @@ namespace DesktopFoldersDirect
             try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             if (appIcon == null) appIcon = SystemIcons.Application;
             PictureBox iconBox = new PictureBox { Image = appIcon.ToBitmap(), SizeMode = PictureBoxSizeMode.StretchImage, Location = new Point(20, 14), Size = new Size(24, 24), BackColor = Color.Transparent };
-            Label titleLabel = new Label { Text = "Cài đặt Desktop Folders", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(52, 16), AutoSize = true, BackColor = Color.Transparent };
+            Label titleLabel = new Label { Text = Loc.Get("settings.title"), Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(52, 16), AutoSize = true, BackColor = Color.Transparent };
             Label badgeLabel = new Label { Text = "v6.0", Font = new Font("Segoe UI", 8f, FontStyle.Bold), ForeColor = CollectionTheme.MutedText, BackColor = Color.FromArgb(30, 41, 59), Location = new Point(236, 18), AutoSize = true, Padding = new Padding(4, 1, 4, 1) };
             HeaderIconButton closeBtn = new HeaderIconButton(HeaderIconKind.Close, 34) { Location = new Point(520 - 46, 9), Size = new Size(34, 34), BackColor = Color.Transparent };
             closeBtn.Click += delegate { Close(); };
@@ -3280,54 +3427,65 @@ namespace DesktopFoldersDirect
             bool dissolve = (controller != null && controller.Settings != null) && controller.Settings.DissolveSingleAppGroup;
             bool startWin = (controller != null && controller.Settings != null) && controller.Settings.StartWithWindows;
             bool reduceMotion = (controller != null && controller.Settings != null) && controller.Settings.ReduceMotion;
+            string language = (controller != null && controller.Settings != null) ? controller.Settings.Language : "system";
 
             // Card 1: Thao tác & Kéo thả
-            Label sec1 = CreateSectionHeader("THAO TÁC & KÉO THẢ", 56);
+            Label sec1 = CreateSectionHeader(Loc.Get("settings.section.behavior"), 56);
             Controls.Add(sec1);
 
             ModernCard card1 = new ModernCard { Location = new Point(25, 78), Size = new Size(470, 142) };
-            Label delayTitle = new Label { Text = "Thời gian giữ icon để gộp nhóm", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            Label delaySub = new Label { Text = "Giữ icon trên đích quá ngưỡng này để tạo nhóm. Thả trước đó Windows sẽ xử lý.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(300, 18), BackColor = Color.Transparent };
+            Label delayTitle = new Label { Text = Loc.Get("settings.drag_delay.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            Label delaySub = new Label { Text = Loc.Get("settings.drag_delay.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(300, 18), BackColor = Color.Transparent };
             delayBadge = new Label { Size = new Size(130, 22), Location = new Point(326, 12), Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = Color.FromArgb(96, 165, 250), TextAlign = ContentAlignment.MiddleRight, BackColor = Color.Transparent };
             delaySlider = new ModernSlider { Minimum = 120, Maximum = 800, Step = 20, Value = Math.Max(120, Math.Min(800, hoverDelay)), Location = new Point(14, 56), Size = new Size(442, 26) };
             Action updateBadge = delegate {
                 int ms = delaySlider.Value;
-                string desc = ms <= 200 ? "Nhanh" : (ms <= 340 ? "Mặc định" : "Chậm");
-                delayBadge.Text = ms + " ms • " + desc;
+                string desc = ms <= 200 ? Loc.Get("settings.drag_delay.fast") : (ms <= 340 ? Loc.Get("settings.drag_delay.default") : Loc.Get("settings.drag_delay.slow"));
+                delayBadge.Text = Loc.Get("settings.drag_delay.badge", ms, desc);
             };
             delaySlider.ValueChanged += delegate { updateBadge(); };
             updateBadge();
 
             Panel div1 = new Panel { Location = new Point(14, 88), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            Label disTitle = new Label { Text = "Tự giải thể khi còn 1 shortcut", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 98), AutoSize = true, BackColor = Color.Transparent };
-            Label disSub = new Label { Text = "Tự hoàn trả icon gốc ra Desktop và xóa nhóm khi chỉ còn một ứng dụng.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 118), Size = new Size(380, 18), BackColor = Color.Transparent };
+            Label disTitle = new Label { Text = Loc.Get("settings.dissolve.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 98), AutoSize = true, BackColor = Color.Transparent };
+            Label disSub = new Label { Text = Loc.Get("settings.dissolve.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 118), Size = new Size(380, 18), BackColor = Color.Transparent };
             dissolveSwitch = new ModernToggleSwitch { Checked = dissolve, Location = new Point(410, 102) };
             card1.Controls.AddRange(new Control[] { delayTitle, delaySub, delayBadge, delaySlider, div1, disTitle, disSub, dissolveSwitch });
             Controls.Add(card1);
 
             // Card 2: Hệ thống & Hiệu năng
-            Label sec2 = CreateSectionHeader("HỆ THỐNG & HIỆU NĂNG", 232);
+            Label sec2 = CreateSectionHeader(Loc.Get("settings.section.system"), 232);
             Controls.Add(sec2);
 
-            ModernCard card2 = new ModernCard { Location = new Point(25, 254), Size = new Size(470, 124) };
-            Label startTitle = new Label { Text = "Khởi động cùng Windows", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            Label startSub = new Label { Text = "Tự động kích hoạt Desktop Folders chạy nền khi bạn đăng nhập.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(380, 18), BackColor = Color.Transparent };
+            ModernCard card2 = new ModernCard { Location = new Point(25, 254), Size = new Size(470, 182) };
+            Label startTitle = new Label { Text = Loc.Get("settings.startup.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            Label startSub = new Label { Text = Loc.Get("settings.startup.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(380, 18), BackColor = Color.Transparent };
             startupSwitch = new ModernToggleSwitch { Checked = startWin, Location = new Point(410, 18) };
 
             Panel div2 = new Panel { Location = new Point(14, 60), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            Label redTitle = new Label { Text = "Giảm chuyển động (Reduce Motion)", Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 70), AutoSize = true, BackColor = Color.Transparent };
-            Label redSub = new Label { Text = "Tắt toàn bộ animation preview, phóng to/thu nhỏ để mở folder tức thì.", Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 90), Size = new Size(380, 18), BackColor = Color.Transparent };
+            Label redTitle = new Label { Text = Loc.Get("settings.reduce_motion.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 70), AutoSize = true, BackColor = Color.Transparent };
+            Label redSub = new Label { Text = Loc.Get("settings.reduce_motion.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 90), Size = new Size(380, 18), BackColor = Color.Transparent };
             reduceSwitch = new ModernToggleSwitch { Checked = reduceMotion, Location = new Point(410, 76) };
-            card2.Controls.AddRange(new Control[] { startTitle, startSub, startupSwitch, div2, redTitle, redSub, reduceSwitch });
+
+            Panel divLang = new Panel { Location = new Point(14, 118), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
+            Label langTitle = new Label { Text = Loc.Get("settings.language.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 128), AutoSize = true, BackColor = Color.Transparent };
+            Label langSub = new Label { Text = Loc.Get("settings.language.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 148), Size = new Size(290, 18), BackColor = Color.Transparent };
+            langCombo = new ComboBox { Location = new Point(310, 134), Size = new Size(146, 28), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 9.5f), BackColor = Color.FromArgb(30, 41, 59), ForeColor = CollectionTheme.Text, FlatStyle = FlatStyle.Flat };
+            langCombo.Items.AddRange(new object[] { Loc.Get("settings.language.system"), "English", "Tiếng Việt" });
+            if (String.Equals(language, "en", StringComparison.OrdinalIgnoreCase)) langCombo.SelectedIndex = 1;
+            else if (String.Equals(language, "vi", StringComparison.OrdinalIgnoreCase)) langCombo.SelectedIndex = 2;
+            else langCombo.SelectedIndex = 0;
+
+            card2.Controls.AddRange(new Control[] { startTitle, startSub, startupSwitch, div2, redTitle, redSub, reduceSwitch, divLang, langTitle, langSub, langCombo });
             Controls.Add(card2);
 
             // Card 3: Chẩn đoán Desktop Explorer
-            Label sec3 = CreateSectionHeader("CHẨN ĐOÁN DESKTOP EXPLORER", 390);
+            Label sec3 = CreateSectionHeader(Loc.Get("settings.section.diagnostics"), 448);
             Controls.Add(sec3);
 
-            ModernCard card3 = new ModernCard { Location = new Point(25, 412), Size = new Size(470, 128) };
-            Label connLabel = new Label { Text = "● Kết nối Desktop Explorer (SysListView32)", Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(52, 211, 153), Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            ModernButton rescanBtn = new ModernButton("Làm mới Desktop", false) { Location = new Point(318, 10), Size = new Size(138, 28) };
+            ModernCard card3 = new ModernCard { Location = new Point(25, 470), Size = new Size(470, 128) };
+            Label connLabel = new Label { Text = Loc.Get("settings.diagnostics.connection"), Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(52, 211, 153), Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
+            ModernButton rescanBtn = new ModernButton(Loc.Get("settings.diagnostics.refresh"), false) { Location = new Point(318, 10), Size = new Size(138, 28) };
             rescanBtn.Click += delegate { if (controller != null) controller.RefreshNow(); targetStatus.Text = ExplorerDesktop.ScanStatus; };
             Panel div3 = new Panel { Location = new Point(14, 44), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
             targetStatus = new Label { Text = ExplorerDesktop.ScanStatus, AutoSize = false, Size = new Size(442, 70), Location = new Point(14, 52), Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(148, 163, 184), BackColor = Color.Transparent };
@@ -3335,10 +3493,10 @@ namespace DesktopFoldersDirect
             Controls.Add(card3);
 
             // Footer
-            Label tip = new Label { Text = "Escape: Đóng  •  Enter: Lưu thay đổi", Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(100, 116, 139), Location = new Point(28, 568), AutoSize = true, BackColor = Color.Transparent };
-            ModernButton cancelBtn = new ModernButton("Đóng", false) { Location = new Point(292, 560), Size = new Size(88, 36) };
+            Label tip = new Label { Text = Loc.Get("settings.footer.tip"), Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(100, 116, 139), Location = new Point(28, 626), AutoSize = true, BackColor = Color.Transparent };
+            ModernButton cancelBtn = new ModernButton(Loc.Get("settings.button.close"), false) { Location = new Point(292, 618), Size = new Size(88, 36) };
             cancelBtn.Click += delegate { Close(); };
-            ModernButton saveBtn = new ModernButton("Lưu cài đặt", true) { Location = new Point(390, 560), Size = new Size(105, 36) };
+            ModernButton saveBtn = new ModernButton(Loc.Get("settings.button.save"), true) { Location = new Point(390, 618), Size = new Size(105, 36) };
             saveBtn.Click += delegate { Apply(); Close(); };
             Controls.AddRange(new Control[] { tip, cancelBtn, saveBtn });
 
@@ -3360,7 +3518,12 @@ namespace DesktopFoldersDirect
             controller.Settings.ReduceMotion = reduceSwitch.Checked;
             controller.Settings.DissolveSingleAppGroup = dissolveSwitch.Checked;
             controller.Settings.FolderHoverDelay = delaySlider.Value;
+            int lIdx = langCombo.SelectedIndex;
+            string chosenLang = (lIdx == 1) ? "en" : ((lIdx == 2) ? "vi" : "system");
+            controller.Settings.Language = chosenLang;
+            Loc.SetLanguage(chosenLang);
             controller.SaveSettings();
+            controller.UpdateTrayText();
         }
 
         protected override void OnResize(EventArgs e)
@@ -3446,17 +3609,29 @@ namespace DesktopFoldersDirect
             pointerMonitor.Start();
 
             Icon appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
-            tray = new NotifyIcon { Icon = appIcon, Visible = false, Text = "Desktop Folders" };
+            tray = new NotifyIcon { Icon = appIcon, Visible = false, Text = Loc.Get("tray.tooltip") };
             ContextMenuStrip menu = new ContextMenuStrip();
-            menu.Items.Add("Desktop Folders đang hoạt động").Enabled = false;
-            menu.Items.Add("Settings…", null, delegate { OpenSettings(); });
+            menu.Items.Add(Loc.Get("tray.status_active")).Enabled = false;
+            menu.Items.Add(Loc.Get("tray.settings"), null, delegate { OpenSettings(); });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Exit", null, delegate { ExitThread(); });
+            menu.Items.Add(Loc.Get("tray.exit"), null, delegate { ExitThread(); });
             tray.ContextMenuStrip = menu; tray.DoubleClick += delegate { OpenSettings(); }; tray.Visible = true;
 
             if (!String.IsNullOrEmpty(requestedGroupId)) EnqueueOpenGroup(requestedGroupId);
             if (showSettingsOnLaunch) RequestSettingsActivation();
             StartBackgroundInitialization();
+        }
+
+        internal void UpdateTrayText()
+        {
+            if (tray == null) return;
+            tray.Text = Loc.Get("tray.tooltip");
+            if (tray.ContextMenuStrip != null && tray.ContextMenuStrip.Items.Count >= 4)
+            {
+                tray.ContextMenuStrip.Items[0].Text = Loc.Get("tray.status_active");
+                tray.ContextMenuStrip.Items[1].Text = Loc.Get("tray.settings");
+                tray.ContextMenuStrip.Items[3].Text = Loc.Get("tray.exit");
+            }
         }
 
         void StartBackgroundInitialization()
@@ -3708,9 +3883,9 @@ namespace DesktopFoldersDirect
                     VirtualGroup nested = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
                     if (nested != null)
                     {
-                        if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, existing.Id)) throw new InvalidOperationException("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.");
+                        if (VirtualLayoutGraph.WouldCreateCycle(layout, nested.Id, existing.Id)) throw new InvalidOperationException(Loc.Get("error.cycle_detected"));
                         VirtualGroup oldParent = VirtualLayoutGraph.ParentsOf(layout, nested.Id).FirstOrDefault();
-                        if (oldParent != null) throw new InvalidOperationException("Collection này đã nằm trong \"" + oldParent.Name + "\".");
+                        if (oldParent != null) throw new InvalidOperationException(Loc.Get("error.already_in_parent", oldParent.Name));
                     }
                     VirtualMember added = VirtualMemberState.Capture(first); added.GroupId = nested == null ? null : nested.Id;
                     try { VirtualMemberState.Hide(added); existing.Members.Add(added); DataStore.SaveVirtualLayout(layout); VirtualMemberState.NotifyChanged(added); }
@@ -3724,7 +3899,7 @@ namespace DesktopFoldersDirect
                 VirtualGroup group = new VirtualGroup { Id = groupId, Name = name, TilePath = tilePath };
                 VirtualMember secondMember = VirtualMemberState.Capture(second); group.Members.Add(secondMember);
                 VirtualGroup nestedFirst = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
-                if (nestedFirst != null && VirtualLayoutGraph.ParentsOf(layout, nestedFirst.Id).Count > 0) throw new InvalidOperationException("Collection này đã nằm trong một collection khác.");
+                if (nestedFirst != null && VirtualLayoutGraph.ParentsOf(layout, nestedFirst.Id).Count > 0) throw new InvalidOperationException(Loc.Get("error.already_in_parent_generic"));
                 VirtualMember firstMember = VirtualMemberState.Capture(first); firstMember.GroupId = nestedFirst == null ? null : nestedFirst.Id; group.Members.Add(firstMember);
                 try
                 {
@@ -3746,7 +3921,7 @@ namespace DesktopFoldersDirect
                 // unrelated Desktop icon. Explorer chooses the free grid slot.
                 RefreshCache();
             }
-            catch (Exception error) { MessageBox.Show("Không thể tạo virtual folder: " + error.Message, "Desktop Folders"); }
+            catch (Exception error) { MessageBox.Show(Loc.Get("error.create_group", error.Message), Loc.Get("app.name")); }
         }
 
         SettingsForm activeSettingsForm;
@@ -3776,12 +3951,12 @@ namespace DesktopFoldersDirect
             {
                 using (RegistryKey key = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run", true))
                 {
-                    if (key == null) throw new InvalidOperationException("Không thể mở khóa Windows Startup.");
+                    if (key == null) throw new InvalidOperationException(Loc.Get("error.startup_registry"));
                     if (Settings.StartWithWindows) key.SetValue("DesktopFolders", "\"" + Application.ExecutablePath + "\" --startup");
                     else key.DeleteValue("DesktopFolders", false);
                 }
             }
-            catch { if (showError) MessageBox.Show("Windows không cho phép thay đổi Startup.", "Desktop Folders"); }
+            catch { if (showError) MessageBox.Show(Loc.Get("error.startup_registry"), Loc.Get("app.name")); }
         }
 
         protected override void ExitThreadCore()

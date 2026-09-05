@@ -106,12 +106,22 @@ Responsible for representing virtual groups and their members, persisting metada
 - **Key Methods**:
   - `LoadVirtualLayout()` / `SaveVirtualLayout()` ([lines 101-122](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L101-L122)): Atomic save using `.tmp` file and `File.Replace()`.
   - `LoadSettings()` / `SaveSettings()` ([lines 81-99](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L81-L99)): Reads and writes `settings.json`.
-  - `LogDrag()` ([line 137](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L137)): Appends timestamps and trace messages when compiled with `TRACE_DRAG`.
-- **Architectural Claims**:
   - **`VERIFIED`**: Data directory is strictly `%APPDATA%\DesktopFolders\` ([line 75](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L75)).
   - **`VERIFIED`**: `SaveVirtualLayout()` guarantees atomicity through `File.Replace()` ([line 121](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L121)).
 
+### 2.5 Loc (Localization Engine)
+- **File / Lines**: [DirectDesktopFolders.cs:72–129](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L72-L129)
+- **Primary Role**: Thread-safe centralized localization and format lookup with dual-loading (disk and embedded resource fallback).
+- **Key Methods**:
+  - `SetLanguage(string lang)`: Configures active language (`"system"`, `"en"`, `"vi"`), resolving system culture via `CultureInfo.CurrentUICulture`.
+  - `Get(string key)` / `Get(string key, params object[] args)`: Retrieves localized text with fallback to English and string interpolation.
+  - `LoadDictionary(string lang)`: Looks up `Resources/strings.{lang}.json` or embedded manifest resource `DesktopFolders.Resources.strings.{lang}.json`.
+- **Architectural Claims**:
+  - **`VERIFIED`**: English dictionary is loaded on initialization as immutable fallback source.
+  - **`VERIFIED`**: If a key is missing in Vietnamese or system language, it transparently falls back to English without throwing.
+
 ---
+
 
 ## 3. Collection UI Subsystem
 
