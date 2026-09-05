@@ -53,7 +53,7 @@ Responsible for observing user desktop pointer actions, maintaining native Explo
   - `TryPlaceAtNearestFreeSlot()` ([line 446](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L446)): Interacts with `IFolderView` COM interface to position items without collisions.
 - **Dependencies**: Windows UI Automation (`AutomationElement`), Shell COM interfaces (`IShellWindows`, `IFolderView`, `IShellFolder`), `Native`.
 - **Architectural Claims**:
-  - **`VERIFIED`**: Only file-backed items (`.lnk`, `.url`, `.exe`, etc.) can be grouped; virtual system icons (Recycle Bin) are excluded ([lines 659-662](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L659-L662)).
+  - **`VERIFIED`**: File-backed items retain their existing path flow. Recycle Bin, This PC, and Network are additionally recognized by localized Shell display name and stable `KNOWNFOLDERID`; other virtual system icons remain excluded (`DirectDesktopFolders.cs:851-883`).
   - **`VERIFIED`**: Restores icons into unoccupied desktop grid slots using expanding radial search from preferred point ([lines 479-493](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L479-L493)).
   - **`INFERRED`**: `BuildPathIndex()` indexes both personal and public desktops to handle shortcuts installed machine-wide.
   - **`UNKNOWN`**: Whether Windows Explorer restarts or crash recoveries require re-fetching `cachedListView`.
@@ -68,7 +68,7 @@ Responsible for representing virtual groups and their members, persisting metada
 - **File / Lines**: [DirectDesktopFolders.cs:66–70](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L66-L70)
 - **Primary Role**: Root schema model containing `Version` and `Groups` (`List<VirtualGroup>`).
 - **Architectural Claims**:
-  - **`VERIFIED`**: Current layout version is `3` ([line 68](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L68)).
+  - **`VERIFIED`**: Current layout version is `4`; version-3 layouts deserialize without migration loss because new member fields are additive (`DirectDesktopFolders.cs:47-80`, `184-205`).
   - **`VERIFIED`**: Directly serialized to JSON in `%APPDATA%\DesktopFolders\virtual-layout.json` ([lines 77](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L77), [120](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L120)).
 
 ### 2.2 VirtualGroup
@@ -79,10 +79,11 @@ Responsible for representing virtual groups and their members, persisting metada
   - `Name`: Display name of the collection.
   - `TilePath`: Absolute path to the `.lnk` file on Desktop.
   - `IconPath`: Absolute path to the generated composite `.ico`.
-  - `Members`: `List<VirtualMember>` holding file paths, original attributes, and optional nested `GroupId`.
+  - `Members`: `List<VirtualMember>` holding either filesystem `Path`/`OriginalAttributes` or Shell `ShellIdentity`/`OriginalShellVisibility`, plus optional nested `GroupId`.
   - `Pinned`: `List<string>` holding paths of favorited items.
 - **Architectural Claims**:
   - **`VERIFIED`**: Retains original member file attributes in `OriginalAttributes` for exact restoration ([line 50](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L50)).
+  - **`VERIFIED`**: Shell members persist a `KNOWNFOLDERID` string and logical original visibility; raw PIDLs are never serialized (`DirectDesktopFolders.cs:55-65`, `480-577`).
   - **`VERIFIED`**: Nested groups are tracked via `VirtualMember.GroupId` while keeping `Path` pointing to the child `.lnk` ([lines 51-53](file:///C:/Users/Ai/.gemini/antigravity/worktrees/DesktopFolder/create_project_map_documentation/DirectDesktopFolders.cs#L51-L53)).
 
 ### 2.3 VirtualLayoutGraph

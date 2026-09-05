@@ -30,10 +30,14 @@ namespace DesktopFoldersDirect
     {
         public string Name;
         public string Path;
+        public string ShellIdentity;
         public Rectangle Bounds;
         public int Index;
         public bool IsGroup;
         public bool IsShortcut;
+        internal string Identity { get { return String.IsNullOrEmpty(ShellIdentity) ? Path : ShellIdentity; } }
+        internal bool IsShellObject { get { return !String.IsNullOrEmpty(ShellIdentity); } }
+        internal bool IsMergeable { get { return IsGroup || IsShortcut || IsShellObject; } }
     }
 
     internal sealed class AppSettings
@@ -51,6 +55,14 @@ namespace DesktopFoldersDirect
         // Set for a nested collection. Path is kept as the current shortcut path
         // so old layouts and shell operations remain compatible.
         public string GroupId;
+        // Stable KNOWNFOLDERID identity for a virtual Shell object. Runtime PIDLs
+        // are deliberately resolved on demand and are never serialized.
+        public string ShellIdentity;
+        public int OriginalShellVisibility = -1;
+        internal string Identity { get { return String.IsNullOrEmpty(ShellIdentity) ? Path : ShellIdentity; } }
+        internal bool IsShellObject { get { return !String.IsNullOrEmpty(ShellIdentity); } }
+        internal bool IsAvailable { get { return IsShellObject ? ShellDesktopItems.IsSupported(ShellIdentity) : File.Exists(Path); } }
+        internal string DisplayName { get { return IsShellObject ? ShellDesktopItems.GetDisplayName(ShellIdentity) : System.IO.Path.GetFileNameWithoutExtension(Path); } }
     }
 
     internal sealed class VirtualGroup
@@ -65,7 +77,7 @@ namespace DesktopFoldersDirect
 
     internal sealed class VirtualLayout
     {
-        public int Version = 3;
+        public int Version = 4;
         public List<VirtualGroup> Groups = new List<VirtualGroup>();
     }
 
@@ -128,7 +140,7 @@ namespace DesktopFoldersDirect
 
         internal static bool IsVirtualMember(string path)
         {
-            return !String.IsNullOrEmpty(path) && LoadVirtualLayout().Groups.Any(g => g.Members.Any(m => !String.IsNullOrEmpty(m.Path) && m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
+            return !String.IsNullOrEmpty(path) && LoadVirtualLayout().Groups.Any(g => g.Members.Any(m => !String.IsNullOrEmpty(m.Identity) && m.Identity.Equals(path, StringComparison.OrdinalIgnoreCase)));
         }
 
         internal static string SerializeVirtualLayout(VirtualLayout layout) { return Json.Serialize(layout); }
@@ -172,7 +184,7 @@ namespace DesktopFoldersDirect
         {
             if (layout == null) return;
             if (layout.Groups == null) layout.Groups = new List<VirtualGroup>();
-            layout.Version = Math.Max(3, layout.Version);
+            layout.Version = Math.Max(4, layout.Version);
             foreach (VirtualGroup parent in layout.Groups)
             {
                 if (parent.Members == null) parent.Members = new List<VirtualMember>();
@@ -391,6 +403,209 @@ namespace DesktopFoldersDirect
         [StructLayout(LayoutKind.Sequential)] internal struct DispatcherQueueOptions { internal int dwSize; internal int threadType; internal int apartmentType; }
         [DllImport("coremessaging.dll", EntryPoint = "CreateDispatcherQueueController", CharSet = CharSet.Unicode)] internal static extern int CreateDispatcherQueueController(DispatcherQueueOptions options, [MarshalAs(UnmanagedType.IUnknown)] out object controller);
 #endif
+    }
+
+    internal static class ShellDesktopItems
+    {
+        const string IdentityPrefix = "knownfolder:";
+        const string VisibilityRoot = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\HideDesktopIcons\\";
+        const uint ShgfiIcon = 0x00000100, ShgfiDisplayName = 0x00000200, ShgfiPidl = 0x00000008;
+        const uint SeeMaskInvokeIdList = 0x0000000C, SeeMaskNoAsync = 0x00000100, SeeMaskUnicode = 0x00004000;
+
+        sealed class Definition
+        {
+            internal Guid KnownFolderId;
+            internal string VisibilityClassId;
+            internal string FallbackName;
+            internal bool DefaultVisible;
+            internal string Identity { get { return IdentityPrefix + KnownFolderId.ToString("B").ToUpperInvariant(); } }
+        }
+
+        static readonly Definition[] Definitions = new Definition[] {
+            new Definition { KnownFolderId = new Guid("B7534046-3ECB-4C18-BE4E-64CD4CB7D6AC"), VisibilityClassId = "{645FF040-5081-101B-9F08-00AA002F954E}", FallbackName = "Recycle Bin", DefaultVisible = true },
+            new Definition { KnownFolderId = new Guid("0AC0837C-BBF8-452A-850D-79D08E667CA7"), VisibilityClassId = "{20D04FE0-3AEA-1069-A2D8-08002B30309D}", FallbackName = "This PC", DefaultVisible = false },
+            new Definition { KnownFolderId = new Guid("D20BEEC4-5CA8-4905-AE3B-BF251EA09B53"), VisibilityClassId = "{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}", FallbackName = "Network", DefaultVisible = false }
+        };
+        static readonly object DisplayNameLock = new object();
+        static readonly Dictionary<string, string> DisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct ShellFileInfo
+        {
+            internal IntPtr hIcon; internal int iIcon; internal uint attributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] internal string displayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] internal string typeName;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct ShellExecuteInfo
+        {
+            internal int cbSize; internal uint fMask; internal IntPtr hwnd;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string verb;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string file;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string parameters;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string directory;
+            internal int show; internal IntPtr instance; internal IntPtr itemIdList;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string className;
+            internal IntPtr classKey; internal uint hotKey; internal IntPtr iconOrMonitor; internal IntPtr process;
+        }
+
+        [DllImport("shell32.dll")] static extern int SHGetKnownFolderIDList(ref Guid knownFolderId, uint flags, IntPtr token, out IntPtr itemIdList);
+        [DllImport("shell32.dll")] static extern void ILFree(IntPtr itemIdList);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SHGetFileInfo(IntPtr path, uint fileAttributes, ref ShellFileInfo fileInfo, uint fileInfoSize, uint flags);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool ShellExecuteEx(ref ShellExecuteInfo executeInfo);
+
+        static Definition Find(string identity)
+        {
+            return String.IsNullOrEmpty(identity) ? null : Definitions.FirstOrDefault(item => item.Identity.Equals(identity, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal static bool IsSupported(string identity) { return Find(identity) != null; }
+        internal static string[] SupportedIdentities { get { return Definitions.Select(item => item.Identity).ToArray(); } }
+
+        internal static bool TryMatchDisplayName(string displayName, out string identity)
+        {
+            identity = null; string requested = (displayName ?? "").Trim(); if (requested.Length == 0) return false;
+            foreach (Definition item in Definitions)
+            {
+                if (requested.Equals(GetDisplayName(item.Identity), StringComparison.CurrentCultureIgnoreCase) || requested.Equals(item.FallbackName, StringComparison.OrdinalIgnoreCase))
+                { identity = item.Identity; return true; }
+            }
+            return false;
+        }
+
+        internal static IntPtr ResolvePidl(string identity)
+        {
+            Definition item = Find(identity); if (item == null) return IntPtr.Zero;
+            Guid knownFolderId = item.KnownFolderId; IntPtr itemIdList; return SHGetKnownFolderIDList(ref knownFolderId, 0, IntPtr.Zero, out itemIdList) >= 0 ? itemIdList : IntPtr.Zero;
+        }
+
+        internal static void FreePidl(IntPtr itemIdList) { if (itemIdList != IntPtr.Zero) ILFree(itemIdList); }
+
+        internal static string GetDisplayName(string identity)
+        {
+            Definition item = Find(identity); if (item == null) return "Shell item";
+            lock (DisplayNameLock) { string cached; if (DisplayNames.TryGetValue(identity, out cached)) return cached; }
+            string resolved = item.FallbackName;
+            IntPtr itemIdList = ResolvePidl(identity);
+            try
+            {
+                if (itemIdList != IntPtr.Zero)
+                {
+                    ShellFileInfo information = new ShellFileInfo();
+                    if (SHGetFileInfo(itemIdList, 0, ref information, (uint)Marshal.SizeOf(typeof(ShellFileInfo)), ShgfiPidl | ShgfiDisplayName) != IntPtr.Zero && !String.IsNullOrWhiteSpace(information.displayName)) resolved = information.displayName;
+                }
+            }
+            finally { FreePidl(itemIdList); }
+            lock (DisplayNameLock) DisplayNames[identity] = resolved; return resolved;
+        }
+
+        internal static Image GetIcon(string identity)
+        {
+            IntPtr itemIdList = ResolvePidl(identity); IntPtr iconHandle = IntPtr.Zero;
+            try
+            {
+                if (itemIdList == IntPtr.Zero) return null;
+                ShellFileInfo information = new ShellFileInfo();
+                IntPtr result = SHGetFileInfo(itemIdList, 0, ref information, (uint)Marshal.SizeOf(typeof(ShellFileInfo)), ShgfiPidl | ShgfiIcon); iconHandle = information.hIcon;
+                if (result == IntPtr.Zero || iconHandle == IntPtr.Zero) return null;
+                using (Icon borrowed = Icon.FromHandle(iconHandle)) using (Icon copy = (Icon)borrowed.Clone()) return copy.ToBitmap();
+            }
+            finally { if (iconHandle != IntPtr.Zero) Native.DestroyIcon(iconHandle); FreePidl(itemIdList); }
+        }
+
+        internal static void Open(string identity, IntPtr owner)
+        {
+            IntPtr itemIdList = ResolvePidl(identity);
+            try
+            {
+                if (itemIdList == IntPtr.Zero) throw new InvalidOperationException("Shell item unavailable.");
+                ShellExecuteInfo information = new ShellExecuteInfo { cbSize = Marshal.SizeOf(typeof(ShellExecuteInfo)), fMask = SeeMaskInvokeIdList | SeeMaskNoAsync | SeeMaskUnicode, hwnd = owner, show = 1, itemIdList = itemIdList };
+                if (!ShellExecuteEx(ref information)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { FreePidl(itemIdList); }
+        }
+
+        internal static bool IsVisible(string identity)
+        {
+            Definition item = Find(identity); if (item == null) return false;
+            try
+            {
+                string displayName = GetDisplayName(identity); IntPtr listHandle = ExplorerDesktop.GetListView();
+                if (listHandle != IntPtr.Zero)
+                {
+                    AutomationElementCollection children = AutomationElement.FromHandle(listHandle).FindAll(TreeScope.Children, Condition.TrueCondition);
+                    for (int i = 0; i < children.Count; i++) if (String.Equals((children[i].Current.Name ?? "").Trim(), displayName, StringComparison.CurrentCultureIgnoreCase)) return true;
+                    return false;
+                }
+            }
+            catch { }
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(VisibilityRoot + "NewStartPanel"))
+                {
+                    object value = key == null ? null : key.GetValue(item.VisibilityClassId, null);
+                    if (value != null) return Convert.ToInt32(value) == 0;
+                }
+            }
+            catch { }
+            return item.DefaultVisible;
+        }
+
+        internal static void SetVisible(string identity, bool visible)
+        {
+            Definition item = Find(identity); if (item == null) throw new InvalidOperationException("Unsupported Shell item.");
+            foreach (string branch in new string[] { "NewStartPanel", "ClassicStartMenu" })
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(VisibilityRoot + branch)) key.SetValue(item.VisibilityClassId, visible ? 0 : 1, RegistryValueKind.DWord);
+            NotifyChanged(identity);
+        }
+
+        internal static void NotifyChanged(string identity)
+        {
+            IntPtr itemIdList = ResolvePidl(identity);
+            try { if (itemIdList != IntPtr.Zero) Native.SHChangeNotify(Native.SHCNE_UPDATEITEM, Native.SHCNF_IDLIST, itemIdList, IntPtr.Zero); }
+            finally { FreePidl(itemIdList); }
+            Native.SHChangeNotify(Native.SHCNE_ASSOCCHANGED, Native.SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        internal static void EnsureCollectedItemsHidden(VirtualLayout layout)
+        {
+            if (layout == null) return;
+            foreach (string identity in layout.Groups.SelectMany(group => group.Members).Where(member => member != null && member.IsShellObject).Select(member => member.ShellIdentity).Distinct(StringComparer.OrdinalIgnoreCase))
+                try { SetVisible(identity, false); } catch (Exception error) { DataStore.LogDrag("SHELL_HIDE restore-on-start failed identity=" + identity + " error=" + error.Message); }
+        }
+    }
+
+    internal static class VirtualMemberState
+    {
+        internal static VirtualMember Capture(DesktopItem item)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+            if (item.IsShellObject) return new VirtualMember { ShellIdentity = item.ShellIdentity, OriginalShellVisibility = ShellDesktopItems.IsVisible(item.ShellIdentity) ? 1 : 0 };
+            FileAttributes attributes = File.GetAttributes(item.Path); return new VirtualMember { Path = item.Path, OriginalAttributes = (int)attributes };
+        }
+
+        internal static void Hide(VirtualMember member)
+        {
+            if (member.IsShellObject) ShellDesktopItems.SetVisible(member.ShellIdentity, false);
+            else File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes | FileAttributes.Hidden);
+        }
+
+        internal static void Restore(VirtualMember member)
+        {
+            if (member.IsShellObject) ShellDesktopItems.SetVisible(member.ShellIdentity, member.OriginalShellVisibility != 0);
+            else File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes);
+        }
+
+        internal static void NotifyChanged(VirtualMember member)
+        {
+            if (!member.IsShellObject) ExplorerDesktop.NotifyPathChanged(member.Path);
+        }
+
+        internal static void QueuePlacement(VirtualMember member, Point preferredScreenPoint)
+        {
+            if (!member.IsShellObject) ExplorerDesktop.QueuePlacement(member.Path, preferredScreenPoint);
+        }
     }
 
     internal static class ExplorerDesktop
@@ -649,24 +864,25 @@ namespace DesktopFoldersDirect
                 AutomationElementCollection children = list.FindAll(TreeScope.Children, Condition.TrueCondition);
                 List<string> unsupported = new List<string>();
                 VirtualLayout virtualLayout = DataStore.LoadVirtualLayout();
-                HashSet<string> hiddenMembers = new HashSet<string>(virtualLayout.Groups.SelectMany(g => g.Members).Select(m => m.Path), StringComparer.OrdinalIgnoreCase);
+                HashSet<string> hiddenMembers = new HashSet<string>(virtualLayout.Groups.SelectMany(g => g.Members).Where(m => m != null && !String.IsNullOrEmpty(m.Identity)).Select(m => m.Identity), StringComparer.OrdinalIgnoreCase);
                 HashSet<string> groupTiles = new HashSet<string>(virtualLayout.Groups.Where(g => !String.IsNullOrEmpty(g.TilePath)).Select(g => g.TilePath), StringComparer.OrdinalIgnoreCase);
                 Dictionary<string, string> pathIndex = BuildPathIndex();
                 for (int i = 0; i < children.Count; i++)
                 {
                     string name = children[i].Current.Name;
                     string path; pathIndex.TryGetValue((name ?? "").Trim(), out path);
-                    if (String.IsNullOrEmpty(path)) { if (unsupported.Count < 6) unsupported.Add(name); continue; }
-                    bool isGroup = File.Exists(path) && groupTiles.Contains(path);
-                    bool isMergeable = File.Exists(path) && !isGroup && !hiddenMembers.Contains(path);
+                    string shellIdentity = null; bool isShellObject = String.IsNullOrEmpty(path) && ShellDesktopItems.TryMatchDisplayName(name, out shellIdentity);
+                    if (String.IsNullOrEmpty(path) && !isShellObject) { if (unsupported.Count < 6) unsupported.Add(name); continue; }
+                    bool isGroup = !isShellObject && File.Exists(path) && groupTiles.Contains(path);
+                    bool isMergeable = isShellObject ? !hiddenMembers.Contains(shellIdentity) : File.Exists(path) && !isGroup && !hiddenMembers.Contains(path);
                     if (!isGroup && !isMergeable) { if (unsupported.Count < 6) unsupported.Add(name); continue; }
                     System.Windows.Rect r = children[i].Current.BoundingRectangle;
                     result.Add(new DesktopItem {
-                        Name = name, Path = path,
+                        Name = name, Path = path, ShellIdentity = isShellObject ? shellIdentity : null,
                         Index = i,
                         Bounds = Rectangle.FromLTRB((int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom),
                         IsGroup = isGroup,
-                        IsShortcut = isMergeable
+                        IsShortcut = !isShellObject && isMergeable
                     });
                 }
                 ScanStatus = "Explorer: " + children.Count + " icon | Nhận diện: " + result.Count + " | Chưa hỗ trợ: " + (children.Count - result.Count) +
@@ -681,7 +897,7 @@ namespace DesktopFoldersDirect
         {
             if (snapshot == null) return null;
             for (int i = snapshot.Length - 1; i >= 0; i--)
-                if ((excludedPath == null || !snapshot[i].Path.Equals(excludedPath, StringComparison.OrdinalIgnoreCase)) && Rectangle.Inflate(snapshot[i].Bounds, 8, 8).Contains(point) && (snapshot[i].IsShortcut || snapshot[i].IsGroup)) return snapshot[i];
+                if ((excludedPath == null || !String.Equals(snapshot[i].Identity, excludedPath, StringComparison.OrdinalIgnoreCase)) && Rectangle.Inflate(snapshot[i].Bounds, 8, 8).Contains(point) && snapshot[i].IsMergeable) return snapshot[i];
             return null;
         }
 
@@ -731,6 +947,19 @@ namespace DesktopFoldersDirect
                 if (Cache.Count >= 256) { foreach (Bitmap image in Cache.Values) image.Dispose(); Cache.Clear(); }
                 Cache[path ?? ""] = loaded;
                 return new Bitmap(loaded);
+            }
+        }
+        internal static Image ForIdentity(string identity)
+        {
+            if (!ShellDesktopItems.IsSupported(identity)) return ForPath(identity);
+            lock (CacheLock)
+            {
+                Bitmap cached;
+                if (Cache.TryGetValue(identity, out cached)) return new Bitmap(cached);
+                Bitmap loaded = ShellDesktopItems.GetIcon(identity) as Bitmap;
+                if (loaded == null) loaded = SystemIcons.Application.ToBitmap();
+                if (Cache.Count >= 256) { foreach (Bitmap image in Cache.Values) image.Dispose(); Cache.Clear(); }
+                Cache[identity] = loaded; return new Bitmap(loaded);
             }
         }
         internal static void Invalidate(string path)
@@ -809,12 +1038,12 @@ namespace DesktopFoldersDirect
                 using (Pen edge = new Pen(CollectionTheme.MutedText, 5))
                 using (System.Drawing.Drawing2D.GraphicsPath shape = Rounded(body, 46)) graphics.DrawPath(edge, shape);
 
-                VirtualMember[] members = group.Members.Where(m => File.Exists(m.Path))
-                    .OrderByDescending(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)).Take(9).ToArray();
+                VirtualMember[] members = group.Members.Where(m => m.IsAvailable)
+                    .OrderByDescending(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)).Take(9).ToArray();
                 const int iconSize = 56, gap = 13, start = 31;
                 for (int i = 0; i < members.Length; i++)
                 {
-                    using (Image icon = IconLoader.ForPath(members[i].Path))
+                    using (Image icon = IconLoader.ForIdentity(members[i].Identity))
                     {
                         int x = start + (i % 3) * (iconSize + gap), y = start + (i / 3) * (iconSize + gap);
                         graphics.DrawImage(icon, new Rectangle(x, y, iconSize, iconSize));
@@ -1041,10 +1270,12 @@ namespace DesktopFoldersDirect
         internal static void Show(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
             if (owner == null || owner.IsDisposed || String.IsNullOrEmpty(path)) return;
-            IntPtr absolute = IntPtr.Zero, menu = IntPtr.Zero; IShellFolderNative parent = null; object rawContext = null;
+            IntPtr absolute = IntPtr.Zero, menu = IntPtr.Zero; bool shellPidl = false; IShellFolderNative parent = null; object rawContext = null;
             try
             {
-                uint attributes; if (SHParseDisplayName(path, IntPtr.Zero, out absolute, 0, out attributes) < 0 || absolute == IntPtr.Zero) throw new InvalidOperationException("Shell item unavailable.");
+                if (ShellDesktopItems.IsSupported(path)) { absolute = ShellDesktopItems.ResolvePidl(path); shellPidl = true; }
+                else { uint attributes; if (SHParseDisplayName(path, IntPtr.Zero, out absolute, 0, out attributes) < 0) absolute = IntPtr.Zero; }
+                if (absolute == IntPtr.Zero) throw new InvalidOperationException("Shell item unavailable.");
                 Guid folderId = typeof(IShellFolderNative).GUID; IntPtr child; if (SHBindToParent(absolute, ref folderId, out parent, out child) < 0 || parent == null) throw new InvalidOperationException("Shell parent unavailable.");
                 Guid contextId = typeof(IContextMenuNative).GUID; if (parent.GetUIObjectOf(owner.Handle, 1, new IntPtr[] { child }, ref contextId, IntPtr.Zero, out rawContext) < 0 || rawContext == null) throw new InvalidOperationException("Shell context menu unavailable.");
                 IContextMenuNative context = (IContextMenuNative)rawContext; menu = CreatePopupMenu(); if (menu == IntPtr.Zero) throw new InvalidOperationException("Popup menu unavailable.");
@@ -1068,12 +1299,13 @@ namespace DesktopFoldersDirect
             catch (Exception error) { DataStore.LogDrag("SHELL_MENU fallback=" + error); ShowFallback(owner, path, pinText, pinAction, moveOutAction, moveBeforeAction, moveAfterAction); }
             finally
             {
-                if (menu != IntPtr.Zero) DestroyMenu(menu); if (rawContext != null && Marshal.IsComObject(rawContext)) Marshal.FinalReleaseComObject(rawContext); if (parent != null && Marshal.IsComObject(parent)) Marshal.FinalReleaseComObject(parent); if (absolute != IntPtr.Zero) Marshal.FreeCoTaskMem(absolute);
+                if (menu != IntPtr.Zero) DestroyMenu(menu); if (rawContext != null && Marshal.IsComObject(rawContext)) Marshal.FinalReleaseComObject(rawContext); if (parent != null && Marshal.IsComObject(parent)) Marshal.FinalReleaseComObject(parent);
+                if (absolute != IntPtr.Zero) { if (shellPidl) ShellDesktopItems.FreePidl(absolute); else Marshal.FreeCoTaskMem(absolute); }
             }
         }
         static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
-            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Di chuyển về trước", null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add("Di chuyển về sau", null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
+            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add("Đưa ra Desktop", null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Di chuyển về trước", null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add("Di chuyển về sau", null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add("Mở", null, delegate { try { if (ShellDesktopItems.IsSupported(path)) ShellDesktopItems.Open(path, owner.Handle); else Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
         }
 
         sealed class ShellMenuMessageWindow : NativeWindow, IDisposable
@@ -1117,9 +1349,9 @@ namespace DesktopFoldersDirect
         ContextMenuStrip immediateContextMenu;
         internal string ItemPath { get; private set; }
 
-        internal AppTile(string path, bool isPinned, bool grid, int width, bool reducedMotion)
+        internal AppTile(string path, string displayName, bool isPinned, bool grid, int width, bool reducedMotion)
         {
-            ItemPath = path; label = Path.GetFileNameWithoutExtension(path); pinned = isPinned; gridMode = grid; icon = IconLoader.ForPath(path);
+            ItemPath = path; label = displayName; pinned = isPinned; gridMode = grid; icon = IconLoader.ForIdentity(path);
             reduceMotion = reducedMotion;
             Size = grid ? new Size(width, width < 170 ? 106 : 134) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
             TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? "Đã ghim ưu tiên" : "";
@@ -2031,25 +2263,25 @@ namespace DesktopFoldersDirect
             CancelReorderAnimation(); themedScroll.SetValue(0); apps.SuspendLayout();
             foreach (Control obsolete in apps.Controls.Cast<Control>().ToArray()) { apps.Controls.Remove(obsolete); obsolete.Dispose(); }
             apps.Top = 0; apps.Height = 10000; string query = search == null ? "" : search.Text.Trim().ToLowerInvariant();
-            VirtualMember[] members = group.Members.Where(m => File.Exists(m.Path) && Path.GetFileNameWithoutExtension(m.Path).ToLowerInvariant().Contains(query)).OrderByDescending(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)).ToArray();
+            VirtualMember[] members = group.Members.Where(m => m.IsAvailable && m.DisplayName.ToLowerInvariant().Contains(query)).OrderByDescending(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)).ToArray();
             bool compactGrid = gridMode && apps.ClientSize.Width < 600;
             int usableWidth = Math.Max(260, apps.ClientSize.Width);
             int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 24) / 3)) : Math.Max(250, usableWidth - 4);
             int rowWidth = gridMode ? (width + 8) * 3 : width;
             apps.Padding = new Padding(Math.Max(0, (usableWidth - rowWidth) / 2), 0, 0, 0);
             if (members.Length == 0) apps.Controls.Add(new Label { Text = "Không tìm thấy ứng dụng phù hợp.", ForeColor = CollectionTheme.MutedText, Font = new Font("Segoe UI", 11), AutoSize = true, Margin = new Padding(16) });
-            bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Path, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
+            bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
             foreach (VirtualMember member in members)
             {
-                string path = member.Path; bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); VirtualGroup nestedGroup = VirtualLayoutGraph.ResolveMemberGroup(layout, member);
+                string path = member.Identity; string displayName = member.DisplayName; bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); VirtualGroup nestedGroup = VirtualLayoutGraph.ResolveMemberGroup(layout, member);
                 if (!activePinnedSection.HasValue || activePinnedSection.Value != pinned)
                 {
                     if (apps.Controls.Count > 0) apps.SetFlowBreak(apps.Controls[apps.Controls.Count - 1], true);
                     SectionHeaderControl section = new SectionHeaderControl(pinned ? "Đã ghim" : "Tất cả ứng dụng", pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
                     apps.Controls.Add(section); apps.SetFlowBreak(section, true); activePinnedSection = pinned;
                 }
-                AppTile tile = new AppTile(path, pinned, gridMode, width, ReduceMotionNow) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
-                tooltips.SetToolTip(tile, Path.GetFileNameWithoutExtension(path));
+                AppTile tile = new AppTile(path, displayName, pinned, gridMode, width, ReduceMotionNow) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
+                tooltips.SetToolTip(tile, displayName);
                 tile.MouseWheel += delegate(object sender, MouseEventArgs e) { themedScroll.ScrollBy(-(e.Delta / 120) * 70); HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; };
                 Point childDragStart = Point.Empty; bool childDidDrag = false;
                 tile.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { childDragStart = e.Location; childDidDrag = false; } };
@@ -2072,7 +2304,7 @@ namespace DesktopFoldersDirect
                 Action activateItem = delegate {
                     if (childDidDrag) { childDidDrag = false; return; }
                     if (nestedGroup != null) { FolderPanel.ShowOrActivate(nestedGroup.TilePath, tile.RectangleToScreen(tile.ClientRectangle), settings); return; }
-                    try { Process.Start(path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); }
+                    try { if (member.IsShellObject) ShellDesktopItems.Open(member.ShellIdentity, Handle); else Process.Start(member.Path); } catch (Exception e) { MessageBox.Show(e.Message, "Desktop Folders"); }
                 };
                 tile.ItemActivated += delegate { activateItem(); };
                 tile.DragEnter += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
@@ -2202,8 +2434,8 @@ namespace DesktopFoldersDirect
         }
         static void ApplyVisualSubset(List<VirtualMember> members, List<string> visualOrder)
         {
-            if (visualOrder == null || visualOrder.Count < 2) return; Dictionary<string, VirtualMember> byPath = members.ToDictionary(member => member.Path, StringComparer.OrdinalIgnoreCase); HashSet<string> visible = new HashSet<string>(visualOrder, StringComparer.OrdinalIgnoreCase); int next = 0;
-            for (int index = 0; index < members.Count && next < visualOrder.Count; index++) if (visible.Contains(members[index].Path)) members[index] = byPath[visualOrder[next++]];
+            if (visualOrder == null || visualOrder.Count < 2) return; Dictionary<string, VirtualMember> byPath = members.ToDictionary(member => member.Identity, StringComparer.OrdinalIgnoreCase); HashSet<string> visible = new HashSet<string>(visualOrder, StringComparer.OrdinalIgnoreCase); int next = 0;
+            for (int index = 0; index < members.Count && next < visualOrder.Count; index++) if (visible.Contains(members[index].Identity)) members[index] = byPath[visualOrder[next++]];
         }
         void CancelGridDragPreview(bool restoreLayout)
         {
@@ -2304,24 +2536,24 @@ namespace DesktopFoldersDirect
         void MoveMemberBy(string path, int delta)
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null || delta == 0) return;
-            bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); List<string> section = group.Members.Where(member => group.Pinned.Contains(member.Path, StringComparer.OrdinalIgnoreCase) == pinned).Select(member => member.Path).ToList();
+            bool pinned = group.Pinned.Contains(path, StringComparer.OrdinalIgnoreCase); List<string> section = group.Members.Where(member => group.Pinned.Contains(member.Identity, StringComparer.OrdinalIgnoreCase) == pinned).Select(member => member.Identity).ToList();
             int current = section.FindIndex(item => item.Equals(path, StringComparison.OrdinalIgnoreCase)); int requested = Math.Max(0, Math.Min(section.Count - 1, current + Math.Sign(delta))); if (current < 0 || current == requested) return;
             string moving = section[current]; section.RemoveAt(current); section.Insert(requested, moving); ApplyVisualSubset(group.Members, section); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); NotifyLayoutChanged();
         }
         void MoveOut(string path)
         {
             layout = DataStore.LoadVirtualLayout(); group = layout.Groups.FirstOrDefault(g => g.Id == groupId); if (group == null) return;
-            VirtualMember member = group.Members.FirstOrDefault(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
+            VirtualMember member = group.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
             List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group, this);
-            try { File.SetAttributes(member.Path, (FileAttributes)member.OriginalAttributes); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); ExplorerDesktop.NotifyPathChanged(member.Path); }
-            catch (Exception e) { try { File.SetAttributes(member.Path, File.GetAttributes(member.Path) | FileAttributes.Hidden); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, "Desktop Folders"); return; }
+            try { VirtualMemberState.Restore(member); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); VirtualMemberState.NotifyChanged(member); }
+            catch (Exception e) { try { VirtualMemberState.Hide(member); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, "Desktop Folders"); return; }
             if (settings.DissolveSingleAppGroup && group.Members.Count <= 1)
             {
                 List<string> affected = DissolveGroupRecord(layout, group, this); DataStore.SaveVirtualLayout(layout);
                 foreach (string affectedId in affected) VirtualLayoutGraph.RefreshGroupAndAncestors(layout, affectedId);
-                ExplorerDesktop.QueuePlacement(member.Path, preferredPlacement); NotifyLayoutChanged(); Close();
+                VirtualMemberState.QueuePlacement(member, preferredPlacement); NotifyLayoutChanged(); Close();
             }
-            else { DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); ExplorerDesktop.QueuePlacement(member.Path, preferredPlacement); NotifyLayoutChanged(); }
+            else { DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); VirtualMemberState.QueuePlacement(member, preferredPlacement); NotifyLayoutChanged(); }
         }
         void DissolveGroup()
         {
@@ -2335,19 +2567,19 @@ namespace DesktopFoldersDirect
             List<string> affected = new List<string>(); List<VirtualMember> desktopRestores = new List<VirtualMember>(); List<VirtualGroup> parents = VirtualLayoutGraph.ParentsOf(current, dissolving.Id); Point preferredPlacement = PreferredDesktopPoint(dissolving, panel);
             if (parents.Count == 0)
             {
-                foreach (VirtualMember remaining in dissolving.Members) try { if (File.Exists(remaining.Path)) { File.SetAttributes(remaining.Path, (FileAttributes)remaining.OriginalAttributes); ExplorerDesktop.NotifyPathChanged(remaining.Path); desktopRestores.Add(remaining); } } catch { }
+                foreach (VirtualMember remaining in dissolving.Members) try { if (remaining.IsAvailable) { VirtualMemberState.Restore(remaining); VirtualMemberState.NotifyChanged(remaining); if (!remaining.IsShellObject) desktopRestores.Add(remaining); } } catch { }
             }
             else
             {
                 foreach (VirtualGroup parent in parents)
                 {
                     List<VirtualMember> links = parent.Members.Where(member => String.Equals(member.GroupId, dissolving.Id, StringComparison.OrdinalIgnoreCase) || (!String.IsNullOrEmpty(member.Path) && member.Path.Equals(dissolving.TilePath, StringComparison.OrdinalIgnoreCase))).ToList();
-                    int insertion = links.Count == 0 ? parent.Members.Count : parent.Members.IndexOf(links[0]); bool wasPinned = links.Any(link => parent.Pinned.Contains(link.Path, StringComparer.OrdinalIgnoreCase));
-                    foreach (VirtualMember link in links) { parent.Members.Remove(link); parent.Pinned.RemoveAll(path => path.Equals(link.Path, StringComparison.OrdinalIgnoreCase)); }
+                    int insertion = links.Count == 0 ? parent.Members.Count : parent.Members.IndexOf(links[0]); bool wasPinned = links.Any(link => parent.Pinned.Contains(link.Identity, StringComparer.OrdinalIgnoreCase));
+                    foreach (VirtualMember link in links) { parent.Members.Remove(link); parent.Pinned.RemoveAll(path => path.Equals(link.Identity, StringComparison.OrdinalIgnoreCase)); }
                     foreach (VirtualMember remaining in dissolving.Members)
                     {
-                        bool duplicate = parent.Members.Any(member => (!String.IsNullOrEmpty(remaining.GroupId) && String.Equals(member.GroupId, remaining.GroupId, StringComparison.OrdinalIgnoreCase)) || member.Path.Equals(remaining.Path, StringComparison.OrdinalIgnoreCase));
-                        if (!duplicate) { parent.Members.Insert(Math.Min(insertion++, parent.Members.Count), remaining); if (wasPinned && !parent.Pinned.Contains(remaining.Path, StringComparer.OrdinalIgnoreCase)) parent.Pinned.Add(remaining.Path); }
+                        bool duplicate = parent.Members.Any(member => (!String.IsNullOrEmpty(remaining.GroupId) && String.Equals(member.GroupId, remaining.GroupId, StringComparison.OrdinalIgnoreCase)) || String.Equals(member.Identity, remaining.Identity, StringComparison.OrdinalIgnoreCase));
+                        if (!duplicate) { parent.Members.Insert(Math.Min(insertion++, parent.Members.Count), remaining); if (wasPinned && !parent.Pinned.Contains(remaining.Identity, StringComparer.OrdinalIgnoreCase)) parent.Pinned.Add(remaining.Identity); }
                     }
                     affected.Add(parent.Id);
                 }
@@ -2355,7 +2587,7 @@ namespace DesktopFoldersDirect
             try { if (File.Exists(dissolving.TilePath)) File.Delete(dissolving.TilePath); } catch { }
             ExplorerDesktop.NotifyPathDeleted(dissolving.TilePath);
             try { if (!String.IsNullOrEmpty(dissolving.IconPath) && File.Exists(dissolving.IconPath)) File.Delete(dissolving.IconPath); } catch { }
-            foreach (VirtualMember restored in desktopRestores) ExplorerDesktop.QueuePlacement(restored.Path, preferredPlacement);
+            foreach (VirtualMember restored in desktopRestores) VirtualMemberState.QueuePlacement(restored, preferredPlacement);
             current.Groups.Remove(dissolving); return affected;
         }
         static Point PreferredDesktopPoint(VirtualGroup sourceGroup, FolderPanel panel = null)
@@ -2428,8 +2660,8 @@ namespace DesktopFoldersDirect
         bool TransferMember(string sourceGroupId, string path, string destinationGroupId = null)
         {
             VirtualLayout latest = DataStore.LoadVirtualLayout(); VirtualGroup from = latest.Groups.FirstOrDefault(g => g.Id == sourceGroupId); VirtualGroup to = latest.Groups.FirstOrDefault(g => g.Id == (destinationGroupId ?? groupId));
-            if (from == null || to == null || to.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) return false;
-            VirtualMember member = from.Members.FirstOrDefault(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); if (member == null) return false;
+            if (from == null || to == null || to.Members.Any(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase))) return false;
+            VirtualMember member = from.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return false;
             VirtualGroup nested = VirtualLayoutGraph.ResolveMemberGroup(latest, member);
             if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show("Không thể đặt một collection vào chính nó hoặc vào collection con của nó.", "Desktop Folders"); return false; }
             from.Members.Remove(member); from.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); to.Members.Add(member);
@@ -2445,7 +2677,7 @@ namespace DesktopFoldersDirect
         }
         void AddMember(string path, string destinationGroupId = null)
         {
-            if (!File.Exists(path)) return; layout = DataStore.LoadVirtualLayout(); VirtualGroup destination = layout.Groups.FirstOrDefault(g => g.Id == (destinationGroupId ?? groupId)); if (destination == null || destination.Members.Any(m => m.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
+            if (!File.Exists(path)) return; layout = DataStore.LoadVirtualLayout(); VirtualGroup destination = layout.Groups.FirstOrDefault(g => g.Id == (destinationGroupId ?? groupId)); if (destination == null || destination.Members.Any(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase))) return;
             VirtualGroup nested = VirtualLayoutGraph.ResolveTileGroup(layout, path);
             if (nested != null)
             {
@@ -2461,8 +2693,8 @@ namespace DesktopFoldersDirect
         bool CreateNestedGroup(string sourcePath, string targetPath)
         {
             VirtualLayout latest = DataStore.LoadVirtualLayout(); VirtualGroup parent = latest.Groups.FirstOrDefault(g => g.Id == groupId); if (parent == null) return false;
-            VirtualMember sourceMember = parent.Members.FirstOrDefault(member => member.Path.Equals(sourcePath, StringComparison.OrdinalIgnoreCase));
-            VirtualMember targetMember = parent.Members.FirstOrDefault(member => member.Path.Equals(targetPath, StringComparison.OrdinalIgnoreCase));
+            VirtualMember sourceMember = parent.Members.FirstOrDefault(member => String.Equals(member.Identity, sourcePath, StringComparison.OrdinalIgnoreCase));
+            VirtualMember targetMember = parent.Members.FirstOrDefault(member => String.Equals(member.Identity, targetPath, StringComparison.OrdinalIgnoreCase));
             if (sourceMember == null || targetMember == null || Object.ReferenceEquals(sourceMember, targetMember)) return false;
             int insertion = Math.Min(parent.Members.IndexOf(sourceMember), parent.Members.IndexOf(targetMember)); bool pinNested = parent.Pinned.Contains(sourcePath, StringComparer.OrdinalIgnoreCase) || parent.Pinned.Contains(targetPath, StringComparer.OrdinalIgnoreCase);
             string name = ExplorerDesktop.NewGroupName(), nestedId = Guid.NewGuid().ToString("N"), tilePath = Path.Combine(ExplorerDesktop.Desktop, name + ".lnk");
@@ -3235,6 +3467,7 @@ namespace DesktopFoldersDirect
 #if !TEST
                     if (!exiting) SyncStartupRegistration(false);
                     if (!exiting) RegisterVirtualGroupType();
+                    if (!exiting) ShellDesktopItems.EnsureCollectedItemsHidden(DataStore.LoadVirtualLayout());
                     bool repairedTiles = false;
                     if (!exiting && NeedsVirtualTileRepair()) { EnsureVirtualTiles(); repairedTiles = true; }
 #endif
@@ -3361,7 +3594,7 @@ namespace DesktopFoldersDirect
         DesktopItem Hit(Point point)
         {
             DesktopItem[] snapshot; lock (cacheLock) snapshot = cache;
-            return ExplorerDesktop.HitTest(snapshot, point, source == null ? null : source.Path);
+            return ExplorerDesktop.HitTest(snapshot, point, source == null ? null : source.Identity);
         }
 
         void PollDesktopPointer()
@@ -3393,9 +3626,9 @@ namespace DesktopFoldersDirect
                 return;
             }
             DesktopItem target = Hit(point);
-            if (target != null && target.Path != source.Path)
+            if (target != null && !String.Equals(target.Identity, source.Identity, StringComparison.OrdinalIgnoreCase))
             {
-                if (hoverTarget == null || hoverTarget.Path != target.Path)
+                if (hoverTarget == null || !String.Equals(hoverTarget.Identity, target.Identity, StringComparison.OrdinalIgnoreCase))
                 {
                     hoverTarget = target; hoverStarted = Environment.TickCount; dragOwnership = DragOwnership.HoverPending; folderPreview.HideAnimated(); hoverArm.Stop(); hoverArm.Interval = Settings.FolderHoverDelay; hoverArm.Start();
                     DataStore.LogDrag("POLL_HOVER target=" + target.Name + " delay=" + Settings.FolderHoverDelay);
@@ -3455,10 +3688,10 @@ namespace DesktopFoldersDirect
             if (first == null || target == null) return;
             if (target.IsGroup)
             {
-                if (File.Exists(first.Path)) AddOrCreateGroup(first, target);
+                if (first.IsMergeable) AddOrCreateGroup(first, target);
                 RefreshCache(); return;
             }
-            if (File.Exists(first.Path) && File.Exists(target.Path)) AddOrCreateGroup(first, target);
+            if (first.IsMergeable && target.IsMergeable) AddOrCreateGroup(first, target);
             RefreshCache();
         }
 
@@ -3471,7 +3704,7 @@ namespace DesktopFoldersDirect
                 {
                     VirtualGroup existing = layout.Groups.FirstOrDefault(g => g.TilePath.Equals(second.Path, StringComparison.OrdinalIgnoreCase));
                     if (existing == null) throw new InvalidDataException("Không tìm thấy virtual group.");
-                    if (existing.Members.Any(m => m.Path.Equals(first.Path, StringComparison.OrdinalIgnoreCase))) return;
+                    if (existing.Members.Any(m => String.Equals(m.Identity, first.Identity, StringComparison.OrdinalIgnoreCase))) return;
                     VirtualGroup nested = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
                     if (nested != null)
                     {
@@ -3479,32 +3712,31 @@ namespace DesktopFoldersDirect
                         VirtualGroup oldParent = VirtualLayoutGraph.ParentsOf(layout, nested.Id).FirstOrDefault();
                         if (oldParent != null) throw new InvalidOperationException("Collection này đã nằm trong \"" + oldParent.Name + "\".");
                     }
-                    FileAttributes original = File.GetAttributes(first.Path); VirtualMember added = new VirtualMember { Path = first.Path, OriginalAttributes = (int)original, GroupId = nested == null ? null : nested.Id };
-                    try { File.SetAttributes(first.Path, original | FileAttributes.Hidden); existing.Members.Add(added); DataStore.SaveVirtualLayout(layout); ExplorerDesktop.NotifyPathChanged(first.Path); }
-                    catch { existing.Members.Remove(added); try { File.SetAttributes(first.Path, original); } catch { } throw; }
+                    VirtualMember added = VirtualMemberState.Capture(first); added.GroupId = nested == null ? null : nested.Id;
+                    try { VirtualMemberState.Hide(added); existing.Members.Add(added); DataStore.SaveVirtualLayout(layout); VirtualMemberState.NotifyChanged(added); }
+                    catch { existing.Members.Remove(added); try { VirtualMemberState.Restore(added); } catch { } throw; }
                     VirtualLayoutGraph.RefreshGroupAndAncestors(layout, existing.Id);
                     FolderPanel.NotifyLayoutChanged();
                     return;
                 }
-                FileAttributes firstAttributes = File.GetAttributes(first.Path), secondAttributes = File.GetAttributes(second.Path);
                 string name = ExplorerDesktop.NewGroupName(), groupId = Guid.NewGuid().ToString("N");
                 string tilePath = Path.Combine(ExplorerDesktop.Desktop, name + ".lnk");
                 VirtualGroup group = new VirtualGroup { Id = groupId, Name = name, TilePath = tilePath };
-                group.Members.Add(new VirtualMember { Path = second.Path, OriginalAttributes = (int)secondAttributes });
+                VirtualMember secondMember = VirtualMemberState.Capture(second); group.Members.Add(secondMember);
                 VirtualGroup nestedFirst = first.IsGroup ? VirtualLayoutGraph.ResolveTileGroup(layout, first.Path) : null;
                 if (nestedFirst != null && VirtualLayoutGraph.ParentsOf(layout, nestedFirst.Id).Count > 0) throw new InvalidOperationException("Collection này đã nằm trong một collection khác.");
-                group.Members.Add(new VirtualMember { Path = first.Path, OriginalAttributes = (int)firstAttributes, GroupId = nestedFirst == null ? null : nestedFirst.Id });
+                VirtualMember firstMember = VirtualMemberState.Capture(first); firstMember.GroupId = nestedFirst == null ? null : nestedFirst.Id; group.Members.Add(firstMember);
                 try
                 {
-                    File.SetAttributes(second.Path, secondAttributes | FileAttributes.Hidden);
-                    File.SetAttributes(first.Path, firstAttributes | FileAttributes.Hidden);
-                    layout.Groups.Add(group); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); ExplorerDesktop.NotifyPathChanged(first.Path); ExplorerDesktop.NotifyPathChanged(second.Path);
+                    VirtualMemberState.Hide(secondMember);
+                    VirtualMemberState.Hide(firstMember);
+                    layout.Groups.Add(group); DataStore.SaveVirtualLayout(layout); VirtualLayoutGraph.RefreshGroupAndAncestors(layout, group.Id); VirtualMemberState.NotifyChanged(firstMember); VirtualMemberState.NotifyChanged(secondMember);
                     FolderPanel.NotifyLayoutChanged();
                 }
                 catch
                 {
-                    try { File.SetAttributes(second.Path, secondAttributes); } catch { }
-                    try { File.SetAttributes(first.Path, firstAttributes); } catch { }
+                    try { VirtualMemberState.Restore(secondMember); } catch { }
+                    try { VirtualMemberState.Restore(firstMember); } catch { }
                     try { if (File.Exists(tilePath)) File.Delete(tilePath); } catch { }
                     try { if (!String.IsNullOrEmpty(group.IconPath) && File.Exists(group.IconPath)) File.Delete(group.IconPath); } catch { }
                     throw;
@@ -3604,6 +3836,28 @@ namespace DesktopFoldersDirect
                 bool valid = a.Members[0].GroupId == "b" && VirtualLayoutGraph.ContainsGroup(graph, "a", "c") && VirtualLayoutGraph.WouldCreateCycle(graph, "a", "c") && !VirtualLayoutGraph.WouldCreateCycle(graph, "c", "a");
                 VirtualLayoutGraph.ReplaceTilePath(graph, "b", "B.lnk", "B2.lnk"); valid = valid && a.Members[0].Path == "B2.lnk";
                 Environment.Exit(valid ? 0 : 3); return;
+            }
+            if (args != null && args.Length >= 1 && args[0] == "--test-shell-items")
+            {
+                bool valid = true; string testDirectory = Path.Combine(Path.GetTempPath(), "DesktopFolders-shell-" + Guid.NewGuid().ToString("N")); VirtualGroup group = new VirtualGroup { Id = "shell", Name = "Shell" };
+                DesktopItem[] desktopItems = ExplorerDesktop.Scan();
+                foreach (string identity in ShellDesktopItems.SupportedIdentities)
+                {
+                    IntPtr itemIdList = ShellDesktopItems.ResolvePidl(identity);
+                    try { valid = valid && itemIdList != IntPtr.Zero && !String.IsNullOrWhiteSpace(ShellDesktopItems.GetDisplayName(identity)); using (Image icon = ShellDesktopItems.GetIcon(identity)) valid = valid && icon != null; }
+                    finally { ShellDesktopItems.FreePidl(itemIdList); }
+                    valid = valid && ShellDesktopItems.IsVisible(identity) == desktopItems.Any(item => String.Equals(item.ShellIdentity, identity, StringComparison.OrdinalIgnoreCase));
+                    group.Members.Add(new VirtualMember { ShellIdentity = identity, OriginalShellVisibility = 1 });
+                }
+                group.Members.Add(new VirtualMember { Path = Application.ExecutablePath, OriginalAttributes = (int)File.GetAttributes(Application.ExecutablePath) });
+                try { Directory.CreateDirectory(testDirectory); group.TilePath = Path.Combine(testDirectory, "Shell.lnk"); group.IconPath = Path.Combine(testDirectory, "Shell.ico"); GroupTileFactory.CreateOrUpdate(group); valid = valid && File.Exists(group.TilePath) && File.Exists(group.IconPath); }
+                finally { try { if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, true); } catch { valid = false; } }
+                VirtualLayout source = new VirtualLayout(); source.Groups.Add(group); string serialized = DataStore.SerializeVirtualLayout(source); VirtualLayout restored = DataStore.DeserializeVirtualLayout(serialized); VirtualLayoutGraph.Normalize(restored);
+                VirtualLayout legacy = DataStore.DeserializeVirtualLayout("{\"Version\":3,\"Groups\":[{\"Id\":\"legacy\",\"Name\":\"Legacy\",\"TilePath\":\"Legacy.lnk\",\"Members\":[{\"Path\":\"Old.lnk\",\"OriginalAttributes\":32}],\"Pinned\":[]}]}"); VirtualLayoutGraph.Normalize(legacy);
+                valid = valid && restored.Version == 4 && restored.Groups[0].Members.Count == 4 && restored.Groups[0].Members.Take(3).All(member => String.IsNullOrEmpty(member.Path) && ShellDesktopItems.IsSupported(member.ShellIdentity)) && restored.Groups[0].Members[3].Path == Application.ExecutablePath;
+                valid = valid && serialized.IndexOf("itemIdList", StringComparison.OrdinalIgnoreCase) < 0 && serialized.IndexOf("\"Identity\":", StringComparison.OrdinalIgnoreCase) < 0;
+                valid = valid && legacy.Version == 4 && legacy.Groups[0].Members[0].Path == "Old.lnk" && !legacy.Groups[0].Members[0].IsShellObject;
+                Environment.Exit(valid ? 0 : 6); return;
             }
             if (args != null && args.Length >= 5 && args[0] == "--test-tile")
             {

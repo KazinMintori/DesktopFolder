@@ -13,6 +13,7 @@
 - **Core Guarantee**: **Zero physical file moves / deletions**. Files receive the `FileAttributes.Hidden` flag. Original attributes and paths are safely kept in `%APPDATA%\DesktopFolders\virtual-layout.json`.
 - **Gesture Mechanism**: Dragging icon A over icon B and holding for ~280 ms (`FolderHoverDelay`) enters `MERGE_ARMED`. Targeted `WM_CANCELMODE` and `VK_ESCAPE` messages cancel Explorer's OLE drag without global hooks. Releasing commits a collection `.lnk` with a 3×3 composite `.ico`.
 - **UI**: Clicking opens `FolderPanel` (dark Nebula glass popup with search, grid/list toggle, reorder, nested groups, and drag-to-desktop restore).
+- **Virtual Shell members**: Recycle Bin, This PC, and Network use schema-v4 `KNOWNFOLDERID` identities. PIDLs are resolved only for the active Shell call and freed immediately; each icon's pre-collection visibility is restored on remove or dissolve.
 
 ---
 
