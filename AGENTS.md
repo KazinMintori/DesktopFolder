@@ -10,7 +10,7 @@ This file is the canonical entry point and rulebook for AI coding agents working
 - Users drag one desktop icon onto another and hold for ~280 ms (`FolderHoverDelay`) to merge them into a virtual collection.
 - **Safety Guarantee**: Files are **never moved into real directories** and **never deleted**. Members receive the `FileAttributes.Hidden` flag, while original paths and attributes are preserved in `%APPDATA%\DesktopFolders\virtual-layout.json`.
 - A representative desktop shortcut (`.lnk`) is created with an auto-generated composite 256×256 PNG-backed `.ico` displaying a 3×3 thumbnail grid of members.
-- Clicking the tile opens a modern, dark-themed Fluent/Nebula glass popup panel (`FolderPanel`) supporting instant search, grid/list toggle, pinning, drag reordering, nested sub-collections, and drag-to-desktop restoration.
+- Clicking the tile opens a modern, dark-themed cosmic glass popup panel (`FolderPanel`) supporting instant search, grid/list toggle, pinning, drag reordering, nested sub-collections, and drag-to-desktop restoration.
 
 ---
 
@@ -20,7 +20,7 @@ The codebase has an unusual monolithic structure:
 - `DirectDesktopFolders.cs`: **Contains the entire application (~3,518 lines)**. All models, Win32 P/Invoke, COM interfaces, UI controls, drag monitor, and entry point live in this single file.
 - `build.ps1`: Reproducible build script invoking the .NET Framework 4.x C# compiler (`csc.exe`).
 - `generate-icon.ps1`: Re-generates `DesktopFolders.ico` from canonical `DesktopFolders.png`.
-- `CollectionBackground.png`: Required embedded resource (Nebula glass background artwork).
+- `CollectionBackground.Cosmic.png`: Required embedded resource (dark blue–indigo–lavender cosmic background artwork). It is embedded under the stable manifest name `DesktopFolders.CollectionBackground.png`.
 - `DesktopFolders.ico` / `DesktopFolders.png`: Application branding assets.
 - `docs/ai/`:
   - `ARCHITECTURE.md` — In-depth architectural decomposition.

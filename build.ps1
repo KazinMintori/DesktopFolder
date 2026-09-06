@@ -6,7 +6,10 @@ param(
 
 $compiler = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $gac = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL"
-$backgroundAsset = Join-Path $PSScriptRoot "CollectionBackground.png"
+$sourceFile = Join-Path $PSScriptRoot "src\DesktopFolders.cs"
+$backgroundAsset = Join-Path $PSScriptRoot "assets\CollectionBackground.png"
+$iconAsset = Join-Path $PSScriptRoot "assets\DesktopFolders.ico"
+$outputPath = if ([System.IO.Path]::IsPathRooted($Output)) { $Output } else { Join-Path $PSScriptRoot $Output }
 $references = @(
     "System.dll",
     "System.Core.dll",
@@ -30,16 +33,18 @@ if ($windowsRuntime -and $systemRuntime -and $numericsRuntime -and $vectorsRunti
 }
 
 if (-not (Test-Path -LiteralPath $compiler)) { throw "Không tìm thấy .NET Framework C# compiler: $compiler" }
-if (-not (Test-Path -LiteralPath $backgroundAsset)) { throw "Thiếu CollectionBackground.png" }
+if (-not (Test-Path -LiteralPath $sourceFile)) { throw "Thiếu src\DesktopFolders.cs" }
+if (-not (Test-Path -LiteralPath $backgroundAsset)) { throw "Thiếu assets\CollectionBackground.png" }
 $stringsEn = Join-Path $PSScriptRoot "Resources\strings.en.json"
 $stringsVi = Join-Path $PSScriptRoot "Resources\strings.vi.json"
 if (-not (Test-Path -LiteralPath $stringsEn)) { throw "Thiếu Resources\strings.en.json" }
 if (-not (Test-Path -LiteralPath $stringsVi)) { throw "Thiếu Resources\strings.vi.json" }
-if (-not (Test-Path -LiteralPath ".\DesktopFolders.ico")) {
-    if (-not (Test-Path -LiteralPath ".\generate-icon.ps1")) { throw "Thiếu DesktopFolders.ico và generate-icon.ps1" }
-    & ".\generate-icon.ps1"
+if (-not (Test-Path -LiteralPath $iconAsset)) {
+    $iconGenerator = Join-Path $PSScriptRoot "generate-icon.ps1"
+    if (-not (Test-Path -LiteralPath $iconGenerator)) { throw "Thiếu assets\DesktopFolders.ico và generate-icon.ps1" }
+    & $iconGenerator
 }
-$arguments = @("/nologo", "/target:winexe", "/optimize+", "/platform:anycpu", "/win32icon:DesktopFolders.ico", "/out:$Output")
+$arguments = @("/nologo", "/target:winexe", "/optimize+", "/platform:anycpu", "/win32icon:$iconAsset", "/out:$outputPath")
 $arguments += "/resource:$backgroundAsset,DesktopFolders.CollectionBackground.png"
 $arguments += "/resource:$stringsEn,DesktopFolders.Resources.strings.en.json"
 $arguments += "/resource:$stringsVi,DesktopFolders.Resources.strings.vi.json"
@@ -49,8 +54,8 @@ if ($TestBuild) { $symbols += "TEST" }
 if ($compositionAvailable) { $symbols += "WINDOWS_COMPOSITION" }
 if ($symbols.Count -gt 0) { $arguments += "/define:$($symbols -join ';')" }
 $arguments += $references | ForEach-Object { "/reference:$_" }
-$arguments += "DirectDesktopFolders.cs"
+$arguments += $sourceFile
 
 & $compiler $arguments
 if ($LASTEXITCODE -ne 0) { throw "Build thất bại với exit code $LASTEXITCODE" }
-Get-Item -LiteralPath $Output | Select-Object FullName, Length, LastWriteTime
+Get-Item -LiteralPath $outputPath | Select-Object FullName, Length, LastWriteTime

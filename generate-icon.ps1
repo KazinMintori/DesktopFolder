@@ -1,6 +1,6 @@
 param(
-    [string]$SourcePng = (Join-Path $PSScriptRoot "DesktopFolders.png"),
-    [string]$IcoPath = (Join-Path $PSScriptRoot "DesktopFolders.ico")
+    [string]$SourcePng = (Join-Path $PSScriptRoot "assets\DesktopFolders.png"),
+    [string]$IcoPath = (Join-Path $PSScriptRoot "assets\DesktopFolders.ico")
 )
 
 if (-not (Test-Path -LiteralPath $SourcePng)) { throw "Không tìm thấy icon PNG nguồn: $SourcePng" }

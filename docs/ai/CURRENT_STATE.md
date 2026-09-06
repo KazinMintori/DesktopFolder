@@ -3,6 +3,8 @@
 **Last updated**: 2026-09-05  
 **Codebase Version**: 6.0.0.0 (`DirectDesktopFolders.cs`)
 
+**UI update, 2026-09-05**: The current UI uses midnight navy surfaces, blue/indigo/lavender interaction accents, readable neutral typography and a dark ethereal cosmic backdrop. Settings scrolls within a bounded window with fixed actions; collection search/view controls have a dedicated toolbar. See [UI_DESIGN.md](UI_DESIGN.md) for source-backed decisions and verification. Older UI descriptions below describe the pre-polish baseline.
+
 ---
 
 ## 1. Baseline Summary
@@ -12,7 +14,7 @@ DesktopFolders is a Windows-only WinForms desktop utility. The entire implementa
 Recent commits confirm active engineering across three critical areas:
 1. **Drag / Pointer Monitor Refactor**: Migration away from global mouse hooks to a read-only 15 ms polling timer (`pointerMonitor`), targeted `WM_CANCELMODE`/`VK_ESCAPE` cancellation, and state machine stabilization (`DragOwnership`).
 2. **Settings UI / UX Overhaul**: Modern card-based Fluent Dark theme with slider, toggles, and live Explorer diagnostic reporting.
-3. **Nebula Glass Collection UI**: Embedded background artwork (`CollectionBackground.png`), true blue $\to$ purple neon gradients, responsive 3-column layout, and spring-physics reordering.
+3. **Cosmic Glass Collection UI**: Embedded `CollectionBackground.Cosmic.png` artwork, restrained blue $\to$ indigo $\to$ lavender accents, responsive 3-column layout, and spring-physics reordering.
 
 ---
 

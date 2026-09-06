@@ -6,7 +6,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -19,11 +18,11 @@ using System.Numerics;
 using Windows.UI.Composition;
 #endif
 
-[assembly: AssemblyTitle("Desktop Folders v6")]
+[assembly: AssemblyTitle("Desktop Folders")]
 [assembly: AssemblyDescription("Virtual iPhone-style collections for Windows Desktop")]
 [assembly: AssemblyProduct("Desktop Folders")]
-[assembly: AssemblyVersion("6.0.0.0")]
-[assembly: AssemblyFileVersion("6.0.0.0")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 
 namespace DesktopFoldersDirect
 {
@@ -433,7 +432,7 @@ namespace DesktopFoldersDirect
 
     internal sealed class SingleInstanceCommandWindow : NativeWindow, IDisposable
     {
-        internal const string WindowCaption = "DesktopFolders.Direct.Command.v6";
+        internal const string WindowCaption = "DesktopFolders.Direct.Command";
         internal const string ActivateCommand = "DesktopFolders.Direct.Activate";
         readonly Action<string> receiver;
 
@@ -503,7 +502,9 @@ namespace DesktopFoldersDirect
         internal const int WM_MOUSEACTIVATE = 0x0021;
         internal const int WM_COPYDATA = 0x004A;
         internal const int WM_NCHITTEST = 0x0084;
+        internal const int WM_NCLBUTTONDOWN = 0x00A1;
         internal const int HTTRANSPARENT = -1;
+        internal const int HTCAPTION = 2;
         internal const int MA_ACTIVATE = 1;
         internal const int WS_EX_TRANSPARENT = 0x20;
         internal const int WS_EX_TOOLWINDOW = 0x80;
@@ -534,6 +535,7 @@ namespace DesktopFoldersDirect
         [DllImport("user32.dll", CharSet = CharSet.Auto)] internal static extern bool PostMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] internal static extern IntPtr SetFocus(IntPtr window);
+        [DllImport("user32.dll")] internal static extern bool ReleaseCapture();
         [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
         [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
@@ -1276,13 +1278,13 @@ namespace DesktopFoldersDirect
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             Rectangle r = new Rectangle(5, 5, Width - 11, Height - 11);
-            using (Brush fill = new SolidBrush(Color.FromArgb(175, 52, 78, 112))) e.Graphics.FillRoundedRectangle(fill, r, 18);
-            using (Pen edge = new Pen(Color.FromArgb(220, 170, 220, 255), 3)) e.Graphics.DrawRoundedRectangle(edge, r, 18);
+            using (Brush fill = new SolidBrush(Color.FromArgb(235, CollectionTheme.Surface))) e.Graphics.FillRoundedRectangle(fill, r, CollectionTheme.RadiusCard);
+            using (Pen edge = new Pen(CollectionTheme.Focus, 2)) e.Graphics.DrawRoundedRectangle(edge, r, CollectionTheme.RadiusCard);
             int tile = Math.Max(12, Math.Min(22, (r.Width - 30) / 2));
             for (int i = 0; i < 4; i++)
             {
                 Rectangle mini = new Rectangle(r.X + 12 + (i % 2) * (tile + 7), r.Y + 12 + (i / 2) * (tile + 7), tile, tile);
-                using (Brush app = new SolidBrush(i == 0 ? Color.FromArgb(220, 61, 160, 255) : Color.FromArgb(180, 122, 92, 246))) e.Graphics.FillRoundedRectangle(app, mini, 6);
+                using (Brush app = new SolidBrush(i == 0 ? CollectionTheme.Focus : CollectionTheme.ControlActive)) e.Graphics.FillRoundedRectangle(app, mini, 6);
             }
         }
         protected override void Dispose(bool disposing) { if (disposing) animation.Dispose(); base.Dispose(disposing); }
@@ -1451,7 +1453,7 @@ namespace DesktopFoldersDirect
         }
         static void ShowFallback(FolderPanel owner, string path, string pinText, Action pinAction, Action moveOutAction, Action moveBeforeAction, Action moveAfterAction)
         {
-            ContextMenuStrip fallback = new ContextMenuStrip(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add(Loc.Get("menu.restore_to_desktop"), null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.move_forward"), null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add(Loc.Get("menu.move_backward"), null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.open"), null, delegate { try { if (ShellDesktopItems.IsSupported(path)) ShellDesktopItems.Open(path, owner.Handle); else Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
+            ContextMenuStrip fallback = CollectionTheme.CreateMenu(); fallback.Items.Add(pinText, null, delegate { if (pinAction != null) pinAction(); }); fallback.Items.Add(Loc.Get("menu.restore_to_desktop"), null, delegate { if (moveOutAction != null) moveOutAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.move_forward"), null, delegate { if (moveBeforeAction != null) moveBeforeAction(); }); fallback.Items.Add(Loc.Get("menu.move_backward"), null, delegate { if (moveAfterAction != null) moveAfterAction(); }); fallback.Items.Add(new ToolStripSeparator()); fallback.Items.Add(Loc.Get("menu.open"), null, delegate { try { if (ShellDesktopItems.IsSupported(path)) ShellDesktopItems.Open(path, owner.Handle); else Process.Start(path); } catch { } }); fallback.Closed += delegate { fallback.Dispose(); }; fallback.Show(owner, owner.PointToClient(Cursor.Position));
         }
 
         sealed class ShellMenuMessageWindow : NativeWindow, IDisposable
@@ -1492,6 +1494,7 @@ namespace DesktopFoldersDirect
         bool dragOver;
         bool dragging;
         bool nestingTarget;
+        bool pressed;
         ContextMenuStrip immediateContextMenu;
         internal string ItemPath { get; private set; }
 
@@ -1505,7 +1508,7 @@ namespace DesktopFoldersDirect
         }
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left) Focus();
+            if (e.Button == MouseButtons.Left) { pressed = true; Focus(); Invalidate(); }
             else if (e.Button == MouseButtons.Right && immediateContextMenu != null) { Focus(); immediateContextMenu.Show(this, e.Location); }
             base.OnMouseDown(e);
         }
@@ -1518,10 +1521,22 @@ namespace DesktopFoldersDirect
             if (e.Button == MouseButtons.Left) RaiseItemActivated();
         }
         protected override void OnMouseEnter(EventArgs e) { hot = true; BeginHoverTransition(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hot = false; BeginHoverTransition(); base.OnMouseLeave(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; pressed = false; BeginHoverTransition(); base.OnMouseLeave(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { pressed = false; Invalidate(); base.OnMouseCaptureChanged(e); }
+        protected override void OnEnabledChanged(EventArgs e) { pressed = false; Invalidate(); base.OnEnabledChanged(e); }
         protected override void OnGotFocus(EventArgs e) { BeginHoverTransition(); base.OnGotFocus(e); }
-        protected override void OnLostFocus(EventArgs e) { BeginHoverTransition(); base.OnLostFocus(e); }
-        protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { RaiseItemActivated(); e.Handled = true; e.SuppressKeyPress = true; } base.OnKeyDown(e); }
+        protected override void OnLostFocus(EventArgs e) { pressed = false; BeginHoverTransition(); base.OnLostFocus(e); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if ((e.Shift && e.KeyCode == Keys.F10) || e.KeyCode == Keys.Apps)
+            {
+                if (immediateContextMenu != null) immediateContextMenu.Show(this, new Point(8, Height - 8));
+                e.Handled = true; e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { RaiseItemActivated(); e.Handled = true; e.SuppressKeyPress = true; }
+            base.OnKeyDown(e);
+        }
         void RaiseItemActivated() { EventHandler activated = ItemActivated; if (activated != null) activated(this, EventArgs.Empty); }
         internal void SetDragVisual(bool isDragging, bool isDropTarget, bool isNestingTarget = false) { dragging = isDragging; dragOver = isDropTarget; nestingTarget = isNestingTarget; BeginHoverTransition(); }
         void BeginHoverTransition()
@@ -1541,21 +1556,30 @@ namespace DesktopFoldersDirect
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            float interaction = Math.Max(0f, Math.Min(1f, hoverProgress)); int inset = 3 - (int)Math.Round(interaction * 2f);
-            int maximumCardHeight = Height - 1;
-            Rectangle card = new Rectangle(inset, inset, Math.Max(8, Width - inset * 2 - 1), Math.Max(8, maximumCardHeight - (inset - 1) * 2));
+            float interaction = Enabled ? Math.Max(0f, Math.Min(1f, hoverProgress)) : 0f;
+            int gridCardHeight = Width < 170 ? 77 : 105;
+            Rectangle card = gridMode ? new Rectangle(2, 2, Math.Max(8, Width - 5), Math.Min(gridCardHeight, Math.Max(8, Height - 5))) : new Rectangle(2, 2, Math.Max(8, Width - 5), Math.Max(8, Height - 5));
             if (dragging)
             {
                 using (Brush placeholder = new SolidBrush(Color.FromArgb(22, CollectionTheme.Focus))) e.Graphics.FillRoundedRectangle(placeholder, card, CollectionTheme.RadiusCard);
                 using (Pen placeholderEdge = new Pen(Color.FromArgb(105, CollectionTheme.Focus), 1.5f)) { placeholderEdge.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash; e.Graphics.DrawRoundedRectangle(placeholderEdge, Rectangle.Inflate(card, -1, -1), CollectionTheme.RadiusCard - 1); }
                 return;
             }
-            int glassAlpha = (int)(60 + 42 * interaction); Color glassBlue = Color.FromArgb(glassAlpha, 19, 54, 125), glassPurple = Color.FromArgb(Math.Max(40, glassAlpha - 10), 91, 24, 137);
-            using (System.Drawing.Drawing2D.LinearGradientBrush fill = new System.Drawing.Drawing2D.LinearGradientBrush(card, glassBlue, glassPurple, 0f)) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
-            Color edgeBlue = Color.FromArgb((int)(74 + 120 * interaction), CollectionTheme.FocusBlue), edgePurple = Color.FromArgb((int)(74 + 120 * interaction), CollectionTheme.Focus);
-            using (System.Drawing.Drawing2D.LinearGradientBrush edgeGradient = new System.Drawing.Drawing2D.LinearGradientBrush(card, edgeBlue, edgePurple, 0f))
-            using (Pen edge = new Pen(edgeGradient, dragOver ? 2f : 1f + .35f * interaction)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
-            using (Pen reflection = new Pen(Color.FromArgb((int)(30 + 24 * interaction), 236, 223, 255), 1f)) e.Graphics.DrawLine(reflection, card.Left + 13, card.Top + 1, card.Right - 13, card.Top + 1);
+            int fillAlpha = pressed ? 118 : (int)Math.Round(82 + 25 * interaction);
+            using (Brush fill = new SolidBrush(Color.FromArgb(fillAlpha, CollectionTheme.CardGlass))) e.Graphics.FillRoundedRectangle(fill, card, CollectionTheme.RadiusCard);
+            if (interaction > .02f || dragOver)
+            {
+                int glowAlpha = dragOver ? 82 : (int)Math.Round(40 * interaction);
+                using (System.Drawing.Drawing2D.LinearGradientBrush glow = new System.Drawing.Drawing2D.LinearGradientBrush(card, Color.FromArgb(glowAlpha, CollectionTheme.NeonBlue), Color.FromArgb(glowAlpha, CollectionTheme.NeonPurple), 0f))
+                using (Pen glowPen = new Pen(glow, dragOver ? 4f : 3f)) e.Graphics.DrawRoundedRectangle(glowPen, Rectangle.Inflate(card, -2, -2), CollectionTheme.RadiusCard - 2);
+            }
+            if (interaction > .02f || dragOver)
+            {
+                int edgeAlpha = dragOver ? 225 : (int)Math.Round(72 + 105 * interaction);
+                using (System.Drawing.Drawing2D.LinearGradientBrush edge = new System.Drawing.Drawing2D.LinearGradientBrush(card, Color.FromArgb(edgeAlpha, CollectionTheme.NeonBlue), Color.FromArgb(edgeAlpha, CollectionTheme.NeonPurple), 0f))
+                using (Pen edgePen = new Pen(edge, dragOver ? 1.75f : 1.25f)) e.Graphics.DrawRoundedRectangle(edgePen, card, CollectionTheme.RadiusCard);
+            }
+            else using (Pen edge = new Pen(Color.FromArgb(48, CollectionTheme.CardBorder), 1f)) e.Graphics.DrawRoundedRectangle(edge, card, CollectionTheme.RadiusCard);
             if (nestingTarget)
             {
                 using (Brush nestFill = new SolidBrush(Color.FromArgb(42, CollectionTheme.Focus))) e.Graphics.FillRoundedRectangle(nestFill, Rectangle.Inflate(card, -5, -5), CollectionTheme.RadiusCard - 4);
@@ -1572,33 +1596,28 @@ namespace DesktopFoldersDirect
             }
             if (gridMode && Width < 170)
             {
-                int iconSize = 42 + (int)Math.Round(3 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + 10;
+                int iconSize = 42, iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 9f, FontStyle.Regular))
-                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 4, card.Bottom - 27, card.Width - 8, 22), format);
+                using (Font name = new Font("Segoe UI", 9.5f, FontStyle.Regular))
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.SecondaryText : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 4, card.Bottom + 2, card.Width - 8, Math.Max(18, Height - card.Bottom - 2)), format);
             }
             else if (gridMode)
             {
-                int iconSize = 56 + (int)Math.Round(4 * interaction), iconX = (Width - iconSize) / 2, iconY = card.Y + 14;
+                int iconSize = 56, iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
                 using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
-                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(Mix(CollectionTheme.SecondaryText, CollectionTheme.Text, interaction))) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 6, card.Bottom - 29, card.Width - 12, 23), format);
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.SecondaryText : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 6, card.Bottom + 2, card.Width - 12, Math.Max(20, Height - card.Bottom - 2)), format);
             }
             else
             {
-                int iconSize = 42 + (int)Math.Round(3 * interaction), iconY = (Height - iconSize) / 2;
+                int iconSize = 42, iconY = (Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(12, iconY, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 10f, FontStyle.Bold))
-                using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
-                using (Brush text = new SolidBrush(CollectionTheme.Text)) e.Graphics.DrawString(label, name, text, new Rectangle(68, 6, Math.Max(40, Width - 84), 50), format);
+                using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
+                using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.Text : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(68, 6, Math.Max(40, Width - 84), 50), format);
             }
-        }
-        static Color Mix(Color background, Color foreground, float amount)
-        {
-            amount = Math.Max(0f, Math.Min(1f, amount));
-            return Color.FromArgb((int)(background.R + (foreground.R - background.R) * amount), (int)(background.G + (foreground.G - background.G) * amount), (int)(background.B + (foreground.B - background.B) * amount));
         }
         static System.Drawing.Drawing2D.GraphicsPath StarPath(PointF center, float outer, float inner)
         {
@@ -1634,34 +1653,41 @@ namespace DesktopFoldersDirect
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.Clear(Color.Magenta); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            e.Graphics.DrawImageUnscaled(snapshot, Point.Empty);
+            e.Graphics.DrawImage(snapshot, new Rectangle(Point.Empty, snapshot.Size), 0, 0, snapshot.Width, snapshot.Height, GraphicsUnit.Pixel);
         }
         protected override void Dispose(bool disposing) { if (disposing) { followTimer.Dispose(); snapshot.Dispose(); } base.Dispose(disposing); }
     }
 
     internal static class CollectionTheme
     {
-        internal static readonly Color Background = Color.FromArgb(5, 3, 19);
-        internal static readonly Color Surface = Color.FromArgb(25, 16, 53);
-        internal static readonly Color SurfaceHover = Color.FromArgb(49, 27, 91);
-        internal static readonly Color Control = Color.FromArgb(13, 9, 38);
-        internal static readonly Color ControlActive = Color.FromArgb(57, 22, 104);
-        internal static readonly Color Border = Color.FromArgb(64, 43, 116);
-        internal static readonly Color Stroke = Color.FromArgb(91, 75, 138);
-        internal static readonly Color NeonBlue = Color.FromArgb(55, 196, 255);
-        internal static readonly Color NeonIndigo = Color.FromArgb(88, 96, 255);
-        internal static readonly Color NeonPurple = Color.FromArgb(220, 72, 255);
-        internal static readonly Color Focus = NeonPurple;
+        internal static readonly Color Background = Color.FromArgb(15, 18, 36);
+        internal static readonly Color Surface = Color.FromArgb(28, 33, 56);
+        internal static readonly Color SurfaceHover = Color.FromArgb(41, 48, 79);
+        internal static readonly Color Control = Color.FromArgb(20, 25, 46);
+        internal static readonly Color ControlActive = Color.FromArgb(48, 58, 96);
+        internal static readonly Color ControlPressed = Color.FromArgb(66, 76, 122);
+        internal static readonly Color Border = Color.FromArgb(65, 71, 103);
+        internal static readonly Color Stroke = Color.FromArgb(130, 140, 175);
+        internal static readonly Color NeonBlue = Color.FromArgb(103, 199, 255);
+        internal static readonly Color NeonIndigo = Color.FromArgb(155, 140, 255);
+        internal static readonly Color NeonPurple = Color.FromArgb(192, 120, 255);
+        internal static readonly Color CardGlass = Color.FromArgb(20, 24, 48);
+        internal static readonly Color CardBorder = Color.FromArgb(175, 184, 255);
+        internal static readonly Color TitleBlue = Color.FromArgb(103, 199, 255);
+        internal static readonly Color TitlePurple = Color.FromArgb(192, 120, 255);
+        internal static readonly Color SearchInterior = Color.FromArgb(27, 31, 68);
+        internal static readonly Color HeaderActionSurface = Color.FromArgb(24, 29, 58);
+        internal static readonly Color Focus = NeonBlue;
         internal static readonly Color FocusBlue = NeonBlue;
-        internal static readonly Color Text = Color.FromArgb(248, 244, 255);
-        internal static readonly Color SecondaryText = Color.FromArgb(221, 205, 255);
-        internal static readonly Color MutedText = Color.FromArgb(167, 139, 250);
-        internal static readonly Color Title = Color.FromArgb(196, 125, 255);
-        internal static readonly Color Pin = Color.FromArgb(255, 215, 106);
-        internal static readonly Color Danger = Color.FromArgb(255, 84, 84);
-        internal const int RadiusWindow = 22;
-        internal const int RadiusControl = 12;
-        internal const int RadiusCard = 16;
+        internal static readonly Color Text = Color.FromArgb(242, 245, 250);
+        internal static readonly Color SecondaryText = Color.FromArgb(206, 213, 234);
+        internal static readonly Color MutedText = Color.FromArgb(163, 173, 204);
+        internal static readonly Color Title = Text;
+        internal static readonly Color Pin = Color.FromArgb(234, 196, 116);
+        internal static readonly Color Danger = Color.FromArgb(255, 148, 152);
+        internal const int RadiusWindow = 20;
+        internal const int RadiusControl = 10;
+        internal const int RadiusCard = 12;
 
         internal static System.Drawing.Drawing2D.ColorBlend NeonBlend(int alpha)
         {
@@ -1671,6 +1697,42 @@ namespace DesktopFoldersDirect
                 Positions = new float[] { 0f, .52f, 1f }
             };
         }
+
+        internal static System.Drawing.Drawing2D.ColorBlend TitleBlend(int alpha)
+        {
+            int safeAlpha = Math.Max(0, Math.Min(255, alpha));
+            return new System.Drawing.Drawing2D.ColorBlend(2) {
+                Colors = new Color[] { Color.FromArgb(safeAlpha, TitlePurple), Color.FromArgb(safeAlpha, TitleBlue) },
+                Positions = new float[] { 0f, 1f }
+            };
+        }
+
+        internal static ContextMenuStrip CreateMenu()
+        {
+            return new ContextMenuStrip { ShowImageMargin = false, BackColor = Surface, ForeColor = Text, Font = new Font("Segoe UI", 10f), Padding = new Padding(4), Renderer = new MenuRenderer() };
+        }
+        sealed class MenuRenderer : ToolStripProfessionalRenderer
+        {
+            internal MenuRenderer() : base(new MenuColors()) { }
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            {
+                e.TextColor = e.Item.Enabled ? Text : MutedText; base.OnRenderItemText(e);
+            }
+        }
+        sealed class MenuColors : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground { get { return Surface; } }
+            public override Color MenuBorder { get { return Border; } }
+            public override Color MenuItemBorder { get { return Stroke; } }
+            public override Color MenuItemSelected { get { return ControlActive; } }
+            public override Color MenuItemSelectedGradientBegin { get { return ControlActive; } }
+            public override Color MenuItemSelectedGradientEnd { get { return ControlActive; } }
+            public override Color SeparatorDark { get { return Border; } }
+            public override Color SeparatorLight { get { return Surface; } }
+            public override Color ImageMarginGradientBegin { get { return Surface; } }
+            public override Color ImageMarginGradientMiddle { get { return Surface; } }
+            public override Color ImageMarginGradientEnd { get { return Surface; } }
+        }
     }
 
     internal sealed class SectionHeaderControl : Control
@@ -1679,20 +1741,22 @@ namespace DesktopFoldersDirect
         readonly int count;
         internal SectionHeaderControl(string sectionLabel, int itemCount, int width)
         {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer, false);
             label = sectionLabel.ToUpperInvariant(); count = itemCount; Size = new Size(width, 28); BackColor = Color.Transparent; TabStop = false; Margin = new Padding(2, 6, 2, 3);
+            AccessibleName = sectionLabel + " · " + itemCount; AccessibleRole = AccessibleRole.Grouping;
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (Brush accent = new SolidBrush(CollectionTheme.Focus)) e.Graphics.FillEllipse(accent, 1, 10, 5, 5);
+            using (Brush accent = new SolidBrush(CollectionTheme.NeonPurple)) e.Graphics.FillEllipse(accent, 1, 10, 5, 5);
             float labelWidth;
             using (Font heading = new Font("Segoe UI", 7.8f, FontStyle.Bold))
             using (Brush text = new SolidBrush(CollectionTheme.SecondaryText)) { e.Graphics.DrawString(label, heading, text, new PointF(13, 7)); labelWidth = e.Graphics.MeasureString(label, heading).Width; }
             string value = count.ToString(); SizeF measured;
             using (Font number = new Font("Segoe UI", 7.5f, FontStyle.Bold)) measured = e.Graphics.MeasureString(value, number);
             RectangleF pill = new RectangleF(Math.Min(Width - 28, 19 + labelWidth), 6, Math.Max(21, measured.Width + 10), 17);
-            using (Brush fill = new SolidBrush(CollectionTheme.ControlActive)) e.Graphics.FillRoundedRectangle(fill, Rectangle.Round(pill), 8);
+            using (Brush fill = new SolidBrush(CollectionTheme.SurfaceHover)) e.Graphics.FillRoundedRectangle(fill, Rectangle.Round(pill), 8);
             using (Font number = new Font("Segoe UI", 7.5f, FontStyle.Bold))
             using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             using (Brush muted = new SolidBrush(CollectionTheme.MutedText)) e.Graphics.DrawString(value, number, muted, pill, format);
@@ -1703,100 +1767,111 @@ namespace DesktopFoldersDirect
 
     internal sealed class GradientLabel : Label
     {
-        internal GradientLabel() { SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true); }
+        internal GradientLabel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             Rectangle textArea = new Rectangle(0, 0, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
-            int gradientWidth = Math.Max(8, Math.Min(textArea.Width, (int)Math.Ceiling(e.Graphics.MeasureString(Text, Font).Width)));
-            Rectangle gradientArea = new Rectangle(0, 0, gradientWidth, textArea.Height);
             using (StringFormat format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             {
-                using (System.Drawing.Drawing2D.LinearGradientBrush glow = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.NeonBlue, CollectionTheme.NeonPurple, 0f))
+                int gradientWidth = Math.Min(textArea.Width, Math.Max(2, (int)Math.Ceiling(e.Graphics.MeasureString(Text ?? "", Font, Int32.MaxValue, format).Width)));
+                Rectangle gradientArea = new Rectangle(0, 0, gradientWidth, textArea.Height);
+                using (System.Drawing.Drawing2D.LinearGradientBrush glow = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.TitlePurple, CollectionTheme.TitleBlue, 0f))
                 {
-                    glow.InterpolationColors = CollectionTheme.NeonBlend(42);
-                    foreach (Point offset in new Point[] { new Point(-1, 0), new Point(1, 0), new Point(0, -1), new Point(0, 1) })
-                    {
-                        Rectangle glowArea = textArea; glowArea.Offset(offset); e.Graphics.DrawString(Text, Font, glow, glowArea, format);
-                    }
+                    glow.InterpolationColors = CollectionTheme.TitleBlend(42); Rectangle shifted = textArea; shifted.Offset(0, 1); e.Graphics.DrawString(Text, Font, glow, shifted, format);
                 }
-                using (System.Drawing.Drawing2D.LinearGradientBrush gradient = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.NeonBlue, CollectionTheme.NeonPurple, 0f))
-                {
-                    gradient.InterpolationColors = CollectionTheme.NeonBlend(255); gradient.GammaCorrection = true; e.Graphics.DrawString(Text, Font, gradient, textArea, format);
-                }
+                using (System.Drawing.Drawing2D.LinearGradientBrush text = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.TitlePurple, CollectionTheme.TitleBlue, 0f))
+                { text.InterpolationColors = CollectionTheme.TitleBlend(255); text.GammaCorrection = true; e.Graphics.DrawString(Text, Font, text, textArea, format); }
             }
         }
     }
 
-    internal sealed class HeaderIconButton : Button
+    internal sealed class HeaderIconButton : Control
     {
         HeaderIconKind kind;
         bool hot;
         bool selected;
-        internal HeaderIconKind IconKind { get { return kind; } set { kind = value; Invalidate(); } }
-        internal bool Selected { get { return selected; } set { selected = value; AccessibleDescription = value ? "Đang chọn" : ""; Invalidate(); } }
+        bool pressed;
+        internal HeaderIconKind IconKind { get { return kind; } set { if (kind == value) return; kind = value; RepaintNow(); } }
+        internal bool Selected { get { return selected; } set { if (selected == value) return; selected = value; RepaintNow(); if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.StateChange, -1); } }
         internal HeaderIconButton(HeaderIconKind iconKind, int width)
         {
-            kind = iconKind; Width = width; FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = CollectionTheme.Control; ForeColor = CollectionTheme.SecondaryText; Cursor = Cursors.Hand; TabStop = true; Text = ""; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            kind = iconKind; Width = width; BackColor = CollectionTheme.HeaderActionSurface; ForeColor = CollectionTheme.SecondaryText; Cursor = Cursors.Hand; TabStop = true; AccessibleRole = AccessibleRole.PushButton; AccessibleName = iconKind.ToString();
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.UserPaint, true);
+            SetStyle(ControlStyles.StandardClick | ControlStyles.StandardDoubleClick, false);
         }
-        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
+        internal void PerformClick() { if (Enabled) OnClick(EventArgs.Empty); }
+        void RepaintNow() { Invalidate(); if (IsHandleCreated && !IsDisposed) Update(); }
+        protected override void OnPaintBackground(PaintEventArgs e) { e.Graphics.Clear(BackColor); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (Enabled && e.Button == MouseButtons.Left) { Focus(); pressed = true; Capture = true; RepaintNow(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { bool activate = Enabled && pressed && e.Button == MouseButtons.Left && ClientRectangle.Contains(e.Location); pressed = false; Capture = false; RepaintNow(); base.OnMouseUp(e); if (activate) OnClick(EventArgs.Empty); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { if (!Capture && pressed) { pressed = false; RepaintNow(); } base.OnMouseCaptureChanged(e); }
+        protected override void OnGotFocus(EventArgs e) { RepaintNow(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { pressed = false; RepaintNow(); base.OnLostFocus(e); }
+        protected override void OnEnabledChanged(EventArgs e) { pressed = false; RepaintNow(); base.OnEnabledChanged(e); }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new HeaderButtonAccessibility(this); }
+        protected override void OnKeyDown(KeyEventArgs e) { if (Enabled && (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)) { pressed = true; e.Handled = true; e.SuppressKeyPress = true; RepaintNow(); } base.OnKeyDown(e); }
+        protected override void OnKeyUp(KeyEventArgs e) { bool activate = Enabled && pressed && (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter); pressed = false; if (activate) { e.Handled = true; e.SuppressKeyPress = true; } RepaintNow(); base.OnKeyUp(e); if (activate) OnClick(EventArgs.Empty); }
+        sealed class HeaderButtonAccessibility : ControlAccessibleObject
+        {
+            readonly HeaderIconButton button;
+            internal HeaderButtonAccessibility(HeaderIconButton owner) : base(owner) { button = owner; }
+            public override AccessibleStates State { get { return base.State | (button.Selected ? AccessibleStates.Pressed : AccessibleStates.None); } }
+            public override void DoDefaultAction() { if (button.Enabled) button.PerformClick(); }
+        }
+        protected override void OnMouseEnter(EventArgs e) { hot = true; RepaintNow(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; RepaintNow(); base.OnMouseLeave(e); }
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.Clear(BackColor);
-            Rectangle box = new Rectangle(4, 5, Math.Max(10, Width - 8), Math.Max(10, Height - 10));
-            Color background = hot || Focused ? (kind == HeaderIconKind.Close ? Color.FromArgb(58, CollectionTheme.Danger) : Color.FromArgb(126, CollectionTheme.ControlActive)) : (selected ? Color.FromArgb(118, 80, 24, 146) : Color.Transparent);
-            Color glyph = selected ? CollectionTheme.Text : (hot ? CollectionTheme.Text : ForeColor);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            Rectangle box = new Rectangle(3, 5, Math.Max(10, Width - 6), Math.Max(10, Height - 10));
+            Color background = pressed ? CollectionTheme.ControlPressed : (selected ? (hot ? Color.FromArgb(56, 65, 106) : CollectionTheme.ControlActive) : (hot && Enabled ? CollectionTheme.SurfaceHover : Color.Transparent));
+            Color glyph = !Enabled ? Color.FromArgb(116, CollectionTheme.MutedText) : (selected ? CollectionTheme.Text : (pressed || hot ? CollectionTheme.Text : ForeColor));
+            if (kind == HeaderIconKind.Close && hot && Enabled) background = Color.FromArgb(pressed ? 124 : 80, CollectionTheme.Danger);
             if (selected && kind != HeaderIconKind.Close)
             {
-                using (System.Drawing.Drawing2D.LinearGradientBrush neon = new System.Drawing.Drawing2D.LinearGradientBrush(box, Color.FromArgb(190, CollectionTheme.FocusBlue), Color.FromArgb(190, CollectionTheme.Focus), 0f)) e.Graphics.FillRoundedRectangle(neon, box, 8);
+                using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 7);
+                using (System.Drawing.Drawing2D.LinearGradientBrush accent = new System.Drawing.Drawing2D.LinearGradientBrush(box, Color.FromArgb(pressed ? 62 : 45, CollectionTheme.NeonBlue), Color.FromArgb(pressed ? 72 : 55, CollectionTheme.NeonPurple), 0f)) e.Graphics.FillRoundedRectangle(accent, box, 7);
             }
-            else if (background.A > 0) using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 8);
-            float cx = Width / 2f, cy = Height / 2f;
-            using (Pen pen = new Pen(kind == HeaderIconKind.Close && hot ? Color.FromArgb(255, 128, 128) : glyph, 1.6f))
+            else if (background.A > 0) using (Brush fill = new SolidBrush(background)) e.Graphics.FillRoundedRectangle(fill, box, 7);
+            if (Focused && Enabled) using (Pen focus = new Pen(CollectionTheme.Focus, 1.5f)) e.Graphics.DrawRoundedRectangle(focus, box, 7);
+            float scale = Math.Max(1f, Math.Min(1.35f, e.Graphics.DpiX / 96f)); float cx = Width / 2f, cy = Height / 2f;
+            using (Pen pen = new Pen(glyph, Math.Max(1.8f, 1.55f * scale)))
             {
                 pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
                 if (kind == HeaderIconKind.Close)
                 {
-                    e.Graphics.DrawLine(pen, cx - 5, cy - 5, cx + 5, cy + 5); e.Graphics.DrawLine(pen, cx + 5, cy - 5, cx - 5, cy + 5);
+                    float extent = 5.2f * scale; e.Graphics.DrawLine(pen, cx - extent, cy - extent, cx + extent, cy + extent); e.Graphics.DrawLine(pen, cx + extent, cy - extent, cx - extent, cy + extent);
                 }
                 else if (kind == HeaderIconKind.Expand)
                 {
-                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx - 2, cy - 7), new PointF(cx - 7, cy - 7), new PointF(cx - 7, cy - 2) });
-                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx + 2, cy - 7), new PointF(cx + 7, cy - 7), new PointF(cx + 7, cy - 2) });
-                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx - 7, cy + 2), new PointF(cx - 7, cy + 7), new PointF(cx - 2, cy + 7) });
-                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx + 7, cy + 2), new PointF(cx + 7, cy + 7), new PointF(cx + 2, cy + 7) });
+                    float outer = 7f * scale, inner = 2.2f * scale;
+                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx - inner, cy - outer), new PointF(cx - outer, cy - outer), new PointF(cx - outer, cy - inner) });
+                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx + inner, cy - outer), new PointF(cx + outer, cy - outer), new PointF(cx + outer, cy - inner) });
+                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx - outer, cy + inner), new PointF(cx - outer, cy + outer), new PointF(cx - inner, cy + outer) });
+                    e.Graphics.DrawLines(pen, new PointF[] { new PointF(cx + outer, cy + inner), new PointF(cx + outer, cy + outer), new PointF(cx + inner, cy + outer) });
                 }
                 else if (kind == HeaderIconKind.Collapse)
                 {
-                    e.Graphics.DrawRectangle(pen, cx - 7, cy - 7, 10, 10); e.Graphics.DrawRectangle(pen, cx - 3, cy - 3, 10, 10);
+                    float outer = 7f * scale, inner = 1.5f * scale, wing = 5f * scale;
+                    e.Graphics.DrawLine(pen, cx - outer, cy - outer, cx - inner, cy - inner); e.Graphics.DrawLine(pen, cx - inner, cy - inner, cx - inner, cy - wing); e.Graphics.DrawLine(pen, cx - inner, cy - inner, cx - wing, cy - inner);
+                    e.Graphics.DrawLine(pen, cx + outer, cy + outer, cx + inner, cy + inner); e.Graphics.DrawLine(pen, cx + inner, cy + inner, cx + inner, cy + wing); e.Graphics.DrawLine(pen, cx + inner, cy + inner, cx + wing, cy + inner);
                 }
                 else if (kind == HeaderIconKind.Grid)
                 {
-                    for (int row = 0; row < 3; row++) for (int column = 0; column < 3; column++) e.Graphics.DrawRectangle(pen, cx - 7 + column * 6, cy - 7 + row * 6, 3, 3);
+                    int squareSize = Math.Max(3, (int)Math.Round(2.5f * scale)), gap = Math.Max(2, (int)Math.Round(2.5f * scale)); int startX = (int)Math.Round(cx - (squareSize * 3 + gap * 2) / 2f), startY = (int)Math.Round(cy - (squareSize * 3 + gap * 2) / 2f);
+                    using (Brush square = new SolidBrush(glyph)) for (int row = 0; row < 3; row++) for (int column = 0; column < 3; column++) e.Graphics.FillRectangle(square, new Rectangle(startX + column * (squareSize + gap), startY + row * (squareSize + gap), squareSize, squareSize));
                 }
                 else
                 {
-                    using (Brush dot = new SolidBrush(ForeColor)) for (int row = 0; row < 3; row++) { float y = cy - 6 + row * 6; e.Graphics.FillEllipse(dot, cx - 8, y - 1, 2, 2); e.Graphics.DrawLine(pen, cx - 3, y, cx + 8, y); }
+                    using (Brush dot = new SolidBrush(glyph)) for (int row = 0; row < 3; row++) { float y = cy + (row - 1) * 6f * scale, dotSize = 2.8f * scale; e.Graphics.FillEllipse(dot, cx - 8f * scale, y - dotSize / 2f, dotSize, dotSize); e.Graphics.DrawLine(pen, cx - 2.5f * scale, y, cx + 8f * scale, y); }
                 }
             }
-        }
-    }
-
-    internal sealed class SearchGlyphControl : Control
-    {
-        internal SearchGlyphControl()
-        {
-            BackColor = CollectionTheme.Control; ForeColor = CollectionTheme.MutedText; TabStop = false; AccessibleRole = AccessibleRole.None;
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
-        }
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.Clear(BackColor); e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            float cx = Width / 2f - 2, cy = Height / 2f - 2;
-            using (Pen pen = new Pen(ForeColor, 1.8f)) { pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round; e.Graphics.DrawEllipse(pen, cx - 7, cy - 7, 13, 13); e.Graphics.DrawLine(pen, cx + 4, cy + 4, cx + 10, cy + 10); }
         }
     }
 
@@ -2018,6 +2093,7 @@ namespace DesktopFoldersDirect
         readonly HeaderIconButton gridButton;
         readonly HeaderIconButton listButton;
         readonly HeaderIconButton expandButton;
+        readonly Panel modes;
         readonly ToolTip tooltips;
         VirtualLayout layout;
         VirtualGroup group;
@@ -2026,7 +2102,6 @@ namespace DesktopFoldersDirect
         Size compactSize = new Size(440, 520);
         Size expandedSize = new Size(840, 600);
         Size finalSize;
-        Point finalLocation;
         Rectangle anchorBounds;
         Rectangle animationOrigin;
         WindowMorphOverlay activeMorph;
@@ -2049,6 +2124,8 @@ namespace DesktopFoldersDirect
         string nestHoverTargetPath;
         int nestHoverStarted;
         bool nestDropArmed;
+        bool backgroundDragPending;
+        bool temporarilyPositioned;
         bool ReduceMotionNow { get { return settings.ReduceMotion || SystemInformation.TerminalServerSession; } }
 
         internal static void ShowOrActivate(string tilePath, Rectangle source, AppSettings currentSettings)
@@ -2110,73 +2187,82 @@ namespace DesktopFoldersDirect
             expandedSize = new Size(Math.Min(expandedSize.Width, Math.Max(compactSize.Width, work.Width - 30)), Math.Min(expandedSize.Height, Math.Max(compactSize.Height, work.Height - 30)));
             finalSize = compactSize;
             Point desired = CalculateAnchoredLocation(source, finalSize, work);
-            finalLocation = FindOpenLocation(desired, finalSize, work);
-            Size = finalSize; Location = finalLocation;
+            Point initialLocation = FindOpenLocation(desired, finalSize, work);
+            Size = finalSize; Location = initialLocation;
             DataStore.LogDrag("PANEL anchor=" + source + " bounds=" + Bounds);
 
-            GradientPanel shell = new GradientPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 9, 10), CornerRadius = CollectionTheme.RadiusWindow };
+            GradientPanel shell = new GradientPanel { Dock = DockStyle.Fill, Padding = new Padding(11, 0, 9, 10), CornerRadius = CollectionTheme.RadiusWindow };
             Controls.Add(shell);
-            Panel header = new BufferedPanel { Dock = DockStyle.Top, Height = 58, BackColor = Color.Transparent };
+            Panel header = new BufferedPanel { Dock = DockStyle.Top, Height = 58, BackColor = Color.Transparent, TabIndex = 1 };
             shell.Controls.Add(header);
-            HeaderIconButton close = HeaderButton(HeaderIconKind.Close, 32); close.Dock = DockStyle.Right; close.Click += delegate { CloseWithMorph(); };
-            expandButton = HeaderButton(HeaderIconKind.Expand, 32); expandButton.Dock = DockStyle.Right; expandButton.Click += delegate { ToggleExpanded(); };
-            listButton = HeaderButton(HeaderIconKind.List, 32); listButton.Dock = DockStyle.Right; listButton.Click += delegate { gridMode = false; UpdateModeButtons(); RenderApps(); };
-            gridButton = HeaderButton(HeaderIconKind.Grid, 32); gridButton.Dock = DockStyle.Right; gridButton.Click += delegate { gridMode = true; UpdateModeButtons(); RenderApps(); };
+            HeaderIconButton close = HeaderButton(HeaderIconKind.Close, 32); close.Click += delegate { CloseWithMorph(); };
+            expandButton = HeaderButton(HeaderIconKind.Expand, 32); expandButton.Click += delegate { ToggleExpanded(); };
+            listButton = HeaderButton(HeaderIconKind.List, 32); listButton.Click += delegate { gridMode = false; UpdateModeButtons(); RenderApps(); };
+            gridButton = HeaderButton(HeaderIconKind.Grid, 32); gridButton.Click += delegate { gridMode = true; UpdateModeButtons(); RenderApps(); };
             close.AccessibleName = Loc.Get("panel.close_accessible"); expandButton.AccessibleName = Loc.Get("panel.expand_accessible"); listButton.AccessibleName = Loc.Get("panel.list_accessible"); gridButton.AccessibleName = Loc.Get("panel.grid_accessible");
-            // Controls dock from the last added element toward the outside edge.
-            // Visual order, left-to-right: grid, list, expand, close.
-            header.Controls.Add(gridButton); header.Controls.Add(listButton); header.Controls.Add(expandButton); header.Controls.Add(close);
+            // Keep all collection actions in one stable header group above search.
             tooltips = new ToolTip(); tooltips.SetToolTip(gridButton, Loc.Get("panel.grid_tooltip")); tooltips.SetToolTip(listButton, Loc.Get("panel.list_tooltip")); tooltips.SetToolTip(expandButton, Loc.Get("panel.expand_tooltip")); tooltips.SetToolTip(close, Loc.Get("panel.close_tooltip"));
 
-            Panel content = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+            Panel content = new BufferedPanel { Dock = DockStyle.Fill, BackColor = Color.Transparent, TabIndex = 0 };
             shell.Controls.Add(content); content.BringToFront();
-            titleLabel = new GradientLabel { Text = group.Name, ForeColor = CollectionTheme.Title, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 0), Width = 190, Height = 54, Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = false };
-            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Title, Font = new Font("Segoe UI", 18, FontStyle.Bold), Location = new Point(0, 12), Width = 190 };
+            titleLabel = new GradientLabel { Text = group.Name, ForeColor = CollectionTheme.Title, BackColor = Color.Transparent, Font = new Font("Segoe UI", 18f, FontStyle.Bold), Location = new Point(0, 2), Size = new Size(190, 54), Cursor = Cursors.IBeam, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = false };
+            titleEditor = new TextBox { Text = group.Name, Visible = false, BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Title, Font = new Font("Segoe UI", 18f, FontStyle.Bold), Location = new Point(0, 12), Width = 190, AccessibleName = Loc.Get("panel.rename") };
+            tooltips.SetToolTip(titleLabel, group.Name + " · F2");
             titleLabel.Click += delegate { BeginTitleEdit(); };
             titleEditor.Leave += delegate { CommitTitleEdit(); };
             titleEditor.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { CommitTitleEdit(); e.SuppressKeyPress = true; } else if (e.KeyCode == Keys.Escape) { EndTitleEdit(false); e.SuppressKeyPress = true; } };
-            header.Controls.Add(titleLabel); header.Controls.Add(titleEditor); titleLabel.SendToBack(); titleEditor.SendToBack();
-            header.Resize += delegate { int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; };
+            modes = new RoundedPanel { Location = new Point(Math.Max(0, header.ClientSize.Width - 147), 7), Size = new Size(140, 44), Radius = 12, Anchor = AnchorStyles.Top | AnchorStyles.Right, BackColor = CollectionTheme.HeaderActionSurface, BorderColor = Color.FromArgb(86, CollectionTheme.CardBorder), BorderEndColor = Color.FromArgb(72, CollectionTheme.NeonPurple), BorderThickness = 1f, Cursor = Cursors.Default, TabIndex = 1 };
+            gridButton.TabIndex = 0; listButton.TabIndex = 1; expandButton.TabIndex = 2; close.TabIndex = 3;
+            gridButton.SetBounds(5, 4, 32, 36); listButton.SetBounds(37, 4, 32, 36); expandButton.SetBounds(69, 4, 32, 36); close.SetBounds(101, 4, 32, 36);
+            modes.Controls.Add(gridButton); modes.Controls.Add(listButton); modes.Controls.Add(expandButton); modes.Controls.Add(close);
+            header.Controls.Add(titleLabel); header.Controls.Add(titleEditor); header.Controls.Add(modes);
+            titleLabel.SendToBack(); titleEditor.SendToBack();
+            Action layoutHeader = delegate {
+                modes.Left = Math.Max(0, header.ClientSize.Width - 147); int titleWidth = Math.Max(70, modes.Left - 8); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth;
+            };
+            header.Resize += delegate { layoutHeader(); };
 
-            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = CollectionTheme.RadiusControl, BackColor = CollectionTheme.Control, BorderColor = CollectionTheme.NeonBlue, BorderEndColor = CollectionTheme.NeonPurple, BorderThickness = 2, ShowSearchGlyph = true, GlyphColor = CollectionTheme.NeonPurple, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = Loc.Get("panel.search_accessible") };
-            searchHint = new Label { Text = Loc.Get("panel.search_hint"), ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.Control, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
+            RoundedPanel searchContainer = new RoundedPanel { Location = new Point(0, 0), Height = 40, Radius = 12, BackColor = CollectionTheme.SearchInterior, BorderColor = CollectionTheme.NeonBlue, BorderEndColor = CollectionTheme.NeonPurple, BorderThickness = 2f, ContinuousPerimeterGradient = true, ShowSearchGlyph = true, GlyphColor = CollectionTheme.NeonPurple, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Cursor = Cursors.IBeam };
+            search = new TextBox { BorderStyle = BorderStyle.None, BackColor = CollectionTheme.SearchInterior, ForeColor = Color.FromArgb(247, 244, 255), Font = new Font("Segoe UI", 10.5f), Location = new Point(46, 10), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Height = 22, AccessibleName = Loc.Get("panel.search_accessible"), Cursor = Cursors.IBeam, HideSelection = false, ShortcutsEnabled = true };
+            searchHint = new Label { Text = Loc.Get("panel.search_hint"), ForeColor = CollectionTheme.MutedText, BackColor = CollectionTheme.SearchInterior, Font = new Font("Segoe UI", 10f), AutoSize = true, Location = new Point(48, 11), Cursor = Cursors.IBeam };
             searchHint.Click += delegate { search.Focus(); };
-            search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonBlue; searchContainer.Invalidate(); };
-            search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.BorderThickness = 2; searchContainer.GlyphColor = CollectionTheme.NeonPurple; searchContainer.Invalidate(); };
+            search.Enter += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.GlyphColor = CollectionTheme.NeonBlue; searchContainer.Invalidate(); };
+            search.Leave += delegate { searchContainer.BorderColor = CollectionTheme.NeonBlue; searchContainer.BorderEndColor = CollectionTheme.NeonPurple; searchContainer.GlyphColor = CollectionTheme.NeonPurple; searchContainer.Invalidate(); };
             searchContainer.Controls.Add(search); searchContainer.Controls.Add(searchHint); searchHint.BringToFront();
             content.Controls.Add(searchContainer);
+            searchContainer.TabIndex = 0;
 
-            appsViewport = new BufferedPanel { Location = new Point(0, 54), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+            appsViewport = new BufferedPanel { Location = new Point(0, 54), BackColor = Color.Transparent, AllowDrop = true, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right, TabIndex = 2 };
             apps = new BufferedFlowLayoutPanel { Location = Point.Empty, AutoScroll = false, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, BackColor = Color.Transparent, Padding = new Padding(5, 0, 0, 0), AllowDrop = true };
             themedScroll = new DarkScrollBar(appsViewport, apps) { Width = 6, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right };
             appsViewport.Controls.Add(apps); content.Controls.Add(appsViewport);
             content.Controls.Add(themedScroll); themedScroll.BringToFront();
             search.TextChanged += delegate { searchHint.Visible = search.TextLength == 0; RenderApps(); };
             Action layoutContent = delegate {
-                int titleWidth = Math.Max(70, header.ClientSize.Width - 132); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; searchContainer.Width = Math.Max(100, content.ClientSize.Width - 7); search.Width = Math.Max(80, searchContainer.ClientSize.Width - 57);
-                int contentHeight = Math.Max(100, content.ClientSize.Height - 54); int scrollX = Math.Max(100, content.ClientSize.Width - 8);
+                layoutHeader();
+                modes.Left = Math.Max(0, header.ClientSize.Width - 147); int titleWidth = Math.Max(70, modes.Left - 8); titleLabel.Width = titleWidth; titleEditor.Width = titleWidth; searchContainer.Width = Math.Max(100, content.ClientSize.Width - 7); search.Width = Math.Max(80, searchContainer.ClientSize.Width - 57);
+                int appsTop = 54; int contentHeight = Math.Max(100, content.ClientSize.Height - appsTop); int scrollX = Math.Max(100, content.ClientSize.Width - 8);
                 appsViewport.Size = new Size(Math.Max(100, scrollX - 8), contentHeight); apps.Width = appsViewport.ClientSize.Width;
-                themedScroll.Location = new Point(scrollX, 54); themedScroll.Height = contentHeight;
+                appsViewport.Location = new Point(0, appsTop); themedScroll.Location = new Point(scrollX, appsTop); themedScroll.Height = contentHeight;
             };
             content.Resize += delegate { layoutContent(); };
-            MouseEventHandler clearTextFocus = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ClearTextFocus(); };
-            MouseDown += clearTextFocus; shell.MouseDown += clearTextFocus; header.MouseDown += clearTextFocus; content.MouseDown += clearTextFocus; appsViewport.MouseDown += clearTextFocus; apps.MouseDown += clearTextFocus; themedScroll.MouseDown += clearTextFocus;
+            foreach (Control background in new Control[] { this, shell, header, content, appsViewport, apps }) BindBackgroundDrag(background);
+            themedScroll.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ClearTextFocus(); };
             DragEnter += OnDragEnter; DragDrop += OnDragDrop; appsViewport.DragEnter += OnDragEnter; appsViewport.DragDrop += OnDragDrop; apps.DragEnter += OnDragEnter; apps.DragDrop += OnDragDrop;
             LayoutChanged += OnSharedLayoutChanged; DesktopPointerDown += OnDesktopPointerDown;
             FormClosed += delegate {
-                CancelActiveMorph(); CancelCompositionCue(); CancelGridDragPreview(false);
+                EndBackgroundDrag(); CancelActiveMorph(); CancelCompositionCue(); CancelGridDragPreview(false);
                 LayoutChanged -= OnSharedLayoutChanged; DesktopPointerDown -= OnDesktopPointerDown;
                 lock (OpenPanelsLock) { WeakReference reference; if (OpenPanels.TryGetValue(groupId, out reference) && Object.ReferenceEquals(reference.Target, this)) OpenPanels.Remove(groupId); }
                 DataStore.LogDrag("PANEL closed=" + groupId);
             };
             PerformLayout(); shell.PerformLayout(); content.PerformLayout(); layoutContent(); UpdateModeButtons(); RenderApps();
-            Shown += delegate { DataStore.LogDrag("PANEL shown=" + group.Name); Opacity = 1.0; };
-            Deactivate += delegate { TopMost = false; DataStore.LogDrag("PANEL deactivate=" + groupId); };
+            Shown += delegate { DataStore.LogDrag("PANEL shown=" + group.Name); Opacity = 1.0; search.Focus(); };
+            Deactivate += delegate { EndBackgroundDrag(); TopMost = false; DataStore.LogDrag("PANEL deactivate=" + groupId); };
             KeyDown += delegate(object sender, KeyEventArgs e) {
                 if (e.KeyCode == Keys.F2) { BeginTitleEdit(); e.Handled = true; }
                 else if (e.Control && e.KeyCode == Keys.F) { search.Focus(); e.SuppressKeyPress = true; }
-                else if (e.KeyCode == Keys.Escape && !titleEditor.Visible) { CloseWithMorph(); e.Handled = true; }
+                else if (e.KeyCode == Keys.Escape && !titleEditor.Visible) { if (search.TextLength > 0) search.Clear(); else CloseWithMorph(); e.Handled = true; e.SuppressKeyPress = true; }
             };
         }
 
@@ -2199,8 +2285,8 @@ namespace DesktopFoldersDirect
         {
             CancelActiveMorph();
             expanded = !expanded; Size target = expanded ? expandedSize : compactSize; Rectangle work = Screen.FromControl(this).WorkingArea;
-            Point location = FindOpenLocation(CalculateAnchoredLocation(anchorBounds, target, work), target, work, this);
-            Rectangle previous = Bounds; finalSize = target; finalLocation = location; Bounds = new Rectangle(location, target); Opacity = 1.0;
+            Point location = temporarilyPositioned ? ClampManualLocation(Location, target, work) : FindOpenLocation(CalculateAnchoredLocation(anchorBounds, target, work), target, work, this);
+            Rectangle previous = Bounds; finalSize = target; Bounds = new Rectangle(location, target); Opacity = 1.0;
             expandButton.IconKind = expanded ? HeaderIconKind.Collapse : HeaderIconKind.Expand; expandButton.AccessibleName = expanded ? Loc.Get("panel.collapse_accessible") : Loc.Get("panel.expand_accessible"); tooltips.SetToolTip(expandButton, expanded ? Loc.Get("panel.collapse_tooltip") : Loc.Get("panel.expand_tooltip")); RenderApps();
             Promote(); if (!ReduceMotionNow) StartCompositionCue(previous, Bounds);
         }
@@ -2258,13 +2344,13 @@ namespace DesktopFoldersDirect
         void ReanchorForActivation(Rectangle source)
         {
             if (IsDisposed || source.Width <= 0 || source.Height <= 0) return;
-            CancelActiveMorph(); anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5);
+            EndBackgroundDrag(); temporarilyPositioned = false; CancelActiveMorph(); anchorBounds = source; animationOrigin = Rectangle.Inflate(source, -5, -5);
             Screen sourceScreen = Screen.FromRectangle(source);
             Rectangle work = sourceScreen != null ? sourceScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
             Point location = FindOpenLocation(CalculateAnchoredLocation(source, finalSize, work), finalSize, work, this);
             // The popup is always committed to its current tile anchor before the
             // first visible frame. Never animate a previously cached form position.
-            Bounds = new Rectangle(location, finalSize); finalLocation = location;
+            Bounds = new Rectangle(location, finalSize);
         }
         static Point FindOpenLocation(Point desired, Size size, Rectangle work, FolderPanel ignored = null)
         {
@@ -2296,11 +2382,12 @@ namespace DesktopFoldersDirect
             if (IsDisposed || !IsHandleCreated || updated.Width <= 0 || updated.Height <= 0) return;
             BeginInvoke(new Action(delegate {
                 if (IsDisposed) return; anchorBounds = updated; animationOrigin = Rectangle.Inflate(updated, -5, -5);
+                if (backgroundDragPending || temporarilyPositioned) return;
                 Screen sourceScreen = Screen.FromRectangle(updated);
                 Rectangle work = sourceScreen != null ? sourceScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
                 Point location = FindOpenLocation(CalculateAnchoredLocation(updated, finalSize, work), finalSize, work, this);
                 if (Math.Abs(location.X - Left) <= 2 && Math.Abs(location.Y - Top) <= 2) return;
-                Bounds = new Rectangle(location, finalSize); finalLocation = location;
+                Bounds = new Rectangle(location, finalSize);
             }));
         }
         static Point CalculateAnchoredLocation(Rectangle anchor, Size size, Rectangle work)
@@ -2403,6 +2490,29 @@ namespace DesktopFoldersDirect
         void CommitTitleEdit() { if (!titleEditor.Visible) return; RenameGroup(titleEditor.Text); EndTitleEdit(true); }
         void ClearTextFocus() { if (titleEditor.Visible) CommitTitleEdit(); ActiveControl = null; if (IsHandleCreated) Native.SetFocus(Handle); }
 
+        void BindBackgroundDrag(Control surface)
+        {
+            if (surface == null) return; surface.Cursor = Cursors.SizeAll;
+            surface.MouseDown += OnBackgroundMouseDown;
+        }
+        void OnBackgroundMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left || IsDisposed || !IsHandleCreated) return;
+            Point previous = Location; ClearTextFocus(); CancelActiveMorph(); CancelCompositionCue(); backgroundDragPending = true;
+            try { Native.ReleaseCapture(); Native.SendMessage(Handle, Native.WM_NCLBUTTONDOWN, (IntPtr)Native.HTCAPTION, IntPtr.Zero); }
+            finally { backgroundDragPending = false; RecordTemporaryPosition(previous); }
+        }
+        void RecordTemporaryPosition(Point previous)
+        {
+            if (Location == previous) return; temporarilyPositioned = true;
+        }
+        void EndBackgroundDrag() { backgroundDragPending = false; }
+        static Point ClampManualLocation(Point requested, Size size, Rectangle work)
+        {
+            const int edge = 12; int maxX = Math.Max(work.Left + edge, work.Right - size.Width - edge), maxY = Math.Max(work.Top + edge, work.Bottom - size.Height - edge);
+            return new Point(Math.Max(work.Left + edge, Math.Min(requested.X, maxX)), Math.Max(work.Top + edge, Math.Min(requested.Y, maxY)));
+        }
+
         void RenderApps()
         {
             if (apps == null || group == null) return;
@@ -2415,7 +2525,20 @@ namespace DesktopFoldersDirect
             int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 24) / 3)) : Math.Max(250, usableWidth - 4);
             int rowWidth = gridMode ? (width + 8) * 3 : width;
             apps.Padding = new Padding(Math.Max(0, (usableWidth - rowWidth) / 2), 0, 0, 0);
-            if (members.Length == 0) apps.Controls.Add(new Label { Text = Loc.Get("panel.search_empty"), ForeColor = CollectionTheme.MutedText, Font = new Font("Segoe UI", 11), AutoSize = true, Margin = new Padding(16) });
+            if (members.Length == 0)
+            {
+                Panel empty = new BufferedPanel { Width = usableWidth - 8, Height = 180, BackColor = Color.Transparent, Margin = new Padding(4, 32, 4, 0) };
+                Label heading = new Label { Text = Loc.Get(query.Length == 0 ? "panel.empty_title" : "panel.search_empty"), ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 12f, FontStyle.Bold), Bounds = new Rectangle(12, 8, empty.Width - 24, 52), TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent };
+                Label hint = new Label { Text = Loc.Get(query.Length == 0 ? "panel.empty_hint" : "panel.search_empty_hint"), ForeColor = CollectionTheme.SecondaryText, Font = new Font("Segoe UI", 10f), Bounds = new Rectangle(20, 64, empty.Width - 40, 56), TextAlign = ContentAlignment.TopCenter, BackColor = Color.Transparent };
+                empty.Controls.Add(heading); empty.Controls.Add(hint);
+                BindBackgroundDrag(empty); BindBackgroundDrag(heading); BindBackgroundDrag(hint);
+                if (query.Length > 0)
+                {
+                    ModernButton clear = new ModernButton(Loc.Get("panel.search_clear")) { Bounds = new Rectangle((empty.Width - 156) / 2, 128, 156, 36) };
+                    clear.Click += delegate { search.Clear(); search.Focus(); }; empty.Controls.Add(clear);
+                }
+                apps.Controls.Add(empty);
+            }
             bool? activePinnedSection = null; int pinnedCount = members.Count(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)); int regularCount = members.Length - pinnedCount;
             foreach (VirtualMember member in members)
             {
@@ -2424,10 +2547,16 @@ namespace DesktopFoldersDirect
                 {
                     if (apps.Controls.Count > 0) apps.SetFlowBreak(apps.Controls[apps.Controls.Count - 1], true);
                     SectionHeaderControl section = new SectionHeaderControl(pinned ? Loc.Get("panel.section.pinned") : Loc.Get("panel.section.all_apps"), pinned ? pinnedCount : regularCount, Math.Max(100, usableWidth - apps.Padding.Left - 6));
+                    BindBackgroundDrag(section);
                     apps.Controls.Add(section); apps.SetFlowBreak(section, true); activePinnedSection = pinned;
                 }
                 AppTile tile = new AppTile(path, displayName, pinned, gridMode, width, ReduceMotionNow) { Margin = gridMode ? new Padding(4, 3, 4, 7) : new Padding(0, 0, 0, 5), AllowDrop = true };
                 tooltips.SetToolTip(tile, displayName);
+                tile.Enter += delegate {
+                    int visibleTop = tile.Top + apps.Top, visibleBottom = visibleTop + tile.Height;
+                    if (visibleTop < 0) themedScroll.ScrollBy(visibleTop - 4);
+                    else if (visibleBottom > appsViewport.Height) themedScroll.ScrollBy(visibleBottom - appsViewport.Height + 4);
+                };
                 tile.MouseWheel += delegate(object sender, MouseEventArgs e) { themedScroll.ScrollBy(-(e.Delta / 120) * 70); HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; };
                 Point childDragStart = Point.Empty; bool childDidDrag = false;
                 tile.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { childDragStart = e.Location; childDidDrag = false; } };
@@ -2457,13 +2586,14 @@ namespace DesktopFoldersDirect
                 tile.DragOver += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
                 tile.DragLeave += delegate { tile.SetDragVisual(false, false); };
                 tile.DragDrop += delegate(object sender, DragEventArgs e) { HandleTileDrop(tile, path, pinned, e); };
-                ContextMenuStrip quickMenu = new ContextMenuStrip { ShowImageMargin = false, BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, Font = new Font("Segoe UI", 9.5f) };
+                ContextMenuStrip quickMenu = CollectionTheme.CreateMenu();
                 quickMenu.Items.Add(nestedGroup == null ? Loc.Get("menu.open") : Loc.Get("menu.open_collection"), null, delegate { activateItem(); });
                 quickMenu.Items.Add(pinned ? Loc.Get("menu.unpin") : Loc.Get("menu.pin"), null, delegate { TogglePin(path); });
                 quickMenu.Items.Add(Loc.Get("menu.restore_to_desktop"), null, delegate { AnimateMoveOut(tile, path); });
                 quickMenu.Items.Add(new ToolStripSeparator());
-                quickMenu.Items.Add(Loc.Get("menu.move_forward"), null, delegate { MoveMemberBy(path, -1); });
-                quickMenu.Items.Add(Loc.Get("menu.move_backward"), null, delegate { MoveMemberBy(path, 1); });
+                List<VirtualMember> sectionMembers = group.Members.Where(item => group.Pinned.Contains(item.Identity, StringComparer.OrdinalIgnoreCase) == pinned).ToList();
+                quickMenu.Items.Add(Loc.Get("menu.move_forward"), null, delegate { MoveMemberBy(path, -1); }).Enabled = sectionMembers.IndexOf(member) > 0;
+                quickMenu.Items.Add(Loc.Get("menu.move_backward"), null, delegate { MoveMemberBy(path, 1); }).Enabled = sectionMembers.IndexOf(member) < sectionMembers.Count - 1;
                 quickMenu.Items.Add(new ToolStripSeparator());
                 quickMenu.Items.Add(Loc.Get("menu.windows_options"), null, delegate { BeginInvoke(new Action(delegate { if (!IsDisposed) ShellContextMenu.Show(this, path, pinned ? Loc.Get("menu.unpin") : Loc.Get("menu.pin"), delegate { TogglePin(path); }, delegate { AnimateMoveOut(tile, path); }, delegate { MoveMemberBy(path, -1); }, delegate { MoveMemberBy(path, 1); }); })); });
                 tile.SetImmediateContextMenu(quickMenu);
@@ -2863,6 +2993,10 @@ namespace DesktopFoldersDirect
             if (message.Msg == Native.WM_MOUSEACTIVATE) { Native.SetForegroundWindow(Handle); message.Result = (IntPtr)Native.MA_ACTIVATE; return; }
             base.WndProc(ref message);
         }
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            using (Brush fallback = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(fallback, ClientRectangle);
+        }
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e); if (ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0) return;
@@ -2909,8 +3043,9 @@ namespace DesktopFoldersDirect
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             Rectangle area = ClientRectangle; if (area.Width <= 0 || area.Height <= 0) return;
+            using (Brush fallback = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(fallback, area);
             if (renderedBackground == null || renderedSize != area.Size) RebuildBackground();
-            if (renderedBackground != null) e.Graphics.DrawImageUnscaled(renderedBackground, Point.Empty); else using (Brush fallback = new SolidBrush(CollectionTheme.Background)) e.Graphics.FillRectangle(fallback, area);
+            if (renderedBackground != null) e.Graphics.DrawImage(renderedBackground, area, 0, 0, renderedBackground.Width, renderedBackground.Height, GraphicsUnit.Pixel);
         }
         void RebuildBackground()
         {
@@ -2926,26 +3061,28 @@ namespace DesktopFoldersDirect
                 double destinationAspect = area.Width / (double)Math.Max(1, area.Height), sourceAspect = artwork.Width / (double)Math.Max(1, artwork.Height); Rectangle source;
                 if (destinationAspect >= sourceAspect)
                 {
-                    int cropHeight = Math.Max(1, Math.Min(artwork.Height, (int)Math.Round(artwork.Width / destinationAspect))); source = new Rectangle(0, artwork.Height - cropHeight, artwork.Width, cropHeight);
+                    int cropHeight = Math.Max(1, Math.Min(artwork.Height, (int)Math.Round(artwork.Width / destinationAspect)));
+                    double focalY = destinationAspect >= 1.05 ? .38 : .45; int cropY = Math.Max(0, Math.Min(artwork.Height - cropHeight, (int)Math.Round(artwork.Height * focalY - cropHeight / 2.0)));
+                    source = new Rectangle(0, cropY, artwork.Width, cropHeight);
                 }
                 else
                 {
                     int cropWidth = Math.Max(1, Math.Min(artwork.Width, (int)Math.Round(artwork.Height * destinationAspect))); source = new Rectangle((artwork.Width - cropWidth) / 2, 0, cropWidth, artwork.Height);
                 }
                 graphics.DrawImage(artwork, area, source, GraphicsUnit.Pixel);
-                using (System.Drawing.Drawing2D.LinearGradientBrush veil = new System.Drawing.Drawing2D.LinearGradientBrush(area, Color.FromArgb(142, 2, 1, 13), Color.FromArgb(50, 18, 5, 48), 90f)) graphics.FillRectangle(veil, area);
+                using (System.Drawing.Drawing2D.LinearGradientBrush veil = new System.Drawing.Drawing2D.LinearGradientBrush(area, Color.FromArgb(112, CollectionTheme.Background), Color.FromArgb(38, CollectionTheme.Background), 90f)) graphics.FillRectangle(veil, area);
             }
             else using (Brush fallback = new SolidBrush(CollectionTheme.Background)) graphics.FillRectangle(fallback, area);
             Rectangle glow = new Rectangle(-area.Width / 4, -area.Height / 2, area.Width + area.Width / 2, Math.Max(180, area.Height));
-            using (System.Drawing.Drawing2D.LinearGradientBrush ambient = new System.Drawing.Drawing2D.LinearGradientBrush(glow, Color.FromArgb(20, CollectionTheme.Focus), Color.FromArgb(0, CollectionTheme.Focus), 90f)) graphics.FillEllipse(ambient, glow);
+            using (System.Drawing.Drawing2D.LinearGradientBrush ambient = new System.Drawing.Drawing2D.LinearGradientBrush(glow, Color.FromArgb(8, CollectionTheme.Focus), Color.FromArgb(0, CollectionTheme.Focus), 90f)) graphics.FillEllipse(ambient, glow);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e); if (ClientSize.Width <= 2 || ClientSize.Height <= 2) return; e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             Rectangle border = new Rectangle(1, 1, ClientSize.Width - 3, ClientSize.Height - 3);
             using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(border, Math.Max(4, cornerRadius - 1)))
-            using (System.Drawing.Drawing2D.LinearGradientBrush neon = new System.Drawing.Drawing2D.LinearGradientBrush(border, Color.FromArgb(205, CollectionTheme.FocusBlue), Color.FromArgb(220, CollectionTheme.Focus), 0f))
-            using (Pen pen = new Pen(neon, 1.4f)) e.Graphics.DrawPath(pen, path);
+            using (System.Drawing.Drawing2D.LinearGradientBrush edge = new System.Drawing.Drawing2D.LinearGradientBrush(border, Color.FromArgb(120, CollectionTheme.NeonBlue), Color.FromArgb(105, CollectionTheme.NeonPurple), 35f))
+            using (Pen pen = new Pen(edge, 1f)) e.Graphics.DrawPath(pen, path);
         }
         protected override void Dispose(bool disposing) { if (disposing && renderedBackground != null) renderedBackground.Dispose(); base.Dispose(disposing); }
     }
@@ -2959,12 +3096,19 @@ namespace DesktopFoldersDirect
         int dragOffset;
         int value;
         int maximum;
+        int activityStarted;
+        bool activityVisible;
+        readonly System.Windows.Forms.Timer activityTimer;
 
         internal DarkScrollBar(Panel scrollViewport, Control scrollContent)
         {
             viewport = scrollViewport; content = scrollContent;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent; Cursor = Cursors.Hand; Visible = false;
+            BackColor = Color.Transparent; Cursor = Cursors.Default; Visible = false; TabStop = false;
+            activityTimer = new System.Windows.Forms.Timer { Interval = 60 }; activityTimer.Tick += delegate {
+                if (unchecked(Environment.TickCount - activityStarted) >= 650) { activityVisible = false; activityTimer.Stop(); }
+                Invalidate();
+            };
             viewport.MouseWheel += delegate(object sender, MouseEventArgs e) { ScrollBy(-(e.Delta / 120) * 70); };
             content.MouseWheel += delegate(object sender, MouseEventArgs e) { ScrollBy(-(e.Delta / 120) * 70); };
             viewport.Resize += delegate { SyncFromTarget(); };
@@ -2977,7 +3121,8 @@ namespace DesktopFoldersDirect
             Visible = maximum > 0 && Height > 20; Invalidate();
         }
         internal void SetValue(int requested) { value = Math.Max(0, Math.Min(maximum, requested)); MoveContent(-value); Invalidate(); }
-        internal void ScrollBy(int delta) { SyncFromTarget(); SetValue(value + delta); }
+        internal void ScrollBy(int delta) { SyncFromTarget(); if (delta != 0) ShowActivity(); SetValue(value + delta); }
+        void ShowActivity() { activityStarted = Environment.TickCount; activityVisible = true; activityTimer.Stop(); activityTimer.Start(); Invalidate(); }
         void MoveContent(int requestedTop)
         {
             if (content.Top == requestedTop) return; content.Top = requestedTop; content.Invalidate(true); viewport.Invalidate(true); viewport.Update();
@@ -2987,19 +3132,23 @@ namespace DesktopFoldersDirect
             int total = Math.Max(1, content.Height), visible = Math.Max(1, viewport.ClientSize.Height);
             int thumbHeight = Math.Max(28, Math.Min(Height, Height * visible / total));
             int range = Math.Max(1, maximum); int y = (Height - thumbHeight) * Math.Min(range, value) / range;
-            return new Rectangle(2, y, Math.Max(4, Width - 4), thumbHeight);
+            int thumbWidth = hot || dragging || activityVisible ? 5 : 4;
+            return new Rectangle(Math.Max(0, (Width - thumbWidth) / 2), y, thumbWidth, thumbHeight);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            Color thumbColor = hot || dragging ? Color.FromArgb(180, CollectionTheme.Focus) : Color.FromArgb(68, 255, 255, 255);
-            using (Brush thumb = new SolidBrush(thumbColor)) e.Graphics.FillRoundedRectangle(thumb, ThumbRectangle(), Math.Max(2, Width / 2 - 1));
+            bool active = hot || dragging || activityVisible;
+            int center = Width / 2;
+            using (Pen track = new Pen(Color.FromArgb(active ? 18 : 5, CollectionTheme.CardBorder), 1f)) e.Graphics.DrawLine(track, center, 2, center, Math.Max(2, Height - 3));
+            Rectangle thumbBounds = ThumbRectangle();
+            using (Brush thumb = new SolidBrush(Color.FromArgb(active ? 178 : 78, CollectionTheme.TitleBlue))) e.Graphics.FillRoundedRectangle(thumb, thumbBounds, thumbBounds.Width / 2);
         }
-        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseEnter(EventArgs e) { hot = true; ShowActivity(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; if (!dragging) Invalidate(); base.OnMouseLeave(e); }
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            if (e.Button != MouseButtons.Left) return; Rectangle thumb = ThumbRectangle(); dragging = true; dragOffset = thumb.Contains(e.Location) ? e.Y - thumb.Top : thumb.Height / 2; Capture = true; SetFromPointer(e.Y); base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return; ShowActivity(); Rectangle thumb = ThumbRectangle(); dragging = true; dragOffset = thumb.Contains(e.Location) ? e.Y - thumb.Top : thumb.Height / 2; Capture = true; SetFromPointer(e.Y); base.OnMouseDown(e);
         }
         protected override void OnMouseMove(MouseEventArgs e) { if (dragging) SetFromPointer(e.Y); base.OnMouseMove(e); }
         protected override void OnMouseUp(MouseEventArgs e) { dragging = false; Capture = false; Invalidate(); base.OnMouseUp(e); }
@@ -3012,6 +3161,7 @@ namespace DesktopFoldersDirect
             Rectangle thumb = ThumbRectangle(); int travel = Math.Max(1, Height - thumb.Height); int top = Math.Max(0, Math.Min(travel, pointerY - dragOffset));
             SetValue(maximum == 0 ? 0 : top * maximum / travel);
         }
+        protected override void Dispose(bool disposing) { if (disposing) activityTimer.Dispose(); base.Dispose(disposing); }
     }
 
     internal sealed class RoundedPanel : Panel
@@ -3019,10 +3169,16 @@ namespace DesktopFoldersDirect
         internal int Radius { get; set; }
         internal Color BorderColor { get; set; }
         internal Color BorderEndColor { get; set; }
-        internal int BorderThickness { get; set; }
+        internal float BorderThickness { get; set; }
+        internal bool ContinuousPerimeterGradient { get; set; }
         internal bool ShowSearchGlyph { get; set; }
         internal Color GlyphColor { get; set; }
-        internal RoundedPanel() { Radius = 16; BorderColor = Color.Transparent; BorderEndColor = Color.Transparent; BorderThickness = 0; GlyphColor = CollectionTheme.MutedText; DoubleBuffered = true; Resize += delegate { UpdateRoundedRegion(); }; }
+        internal RoundedPanel()
+        {
+            Radius = 16; BorderColor = Color.Transparent; BorderEndColor = Color.Transparent; BorderThickness = 0; GlyphColor = CollectionTheme.MutedText; DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
+            Resize += delegate { UpdateRoundedRegion(); };
+        }
         void UpdateRoundedRegion()
         {
             if (ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0) return;
@@ -3038,18 +3194,17 @@ namespace DesktopFoldersDirect
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             if (BorderThickness > 0 && BorderColor.A > 0)
             {
-                int inset = Math.Max(1, BorderThickness);
+                int inset = Math.Max(1, (int)Math.Floor(BorderThickness));
                 Rectangle border = new Rectangle(inset, inset, Math.Max(1, ClientSize.Width - inset * 2 - 1), Math.Max(1, ClientSize.Height - inset * 2 - 1));
                 if (BorderEndColor.A > 0)
                 {
-                    using (System.Drawing.Drawing2D.LinearGradientBrush glowGradient = new System.Drawing.Drawing2D.LinearGradientBrush(border, BorderColor, BorderEndColor, 0f))
+                    if (ContinuousPerimeterGradient)
                     {
-                        glowGradient.InterpolationColors = CollectionTheme.NeonBlend(52);
-                        using (Pen glowPen = new Pen(glowGradient, BorderThickness + 2f)) e.Graphics.DrawRoundedRectangle(glowPen, border, Math.Max(3, Radius - inset));
+                        DrawContinuousPerimeter(e.Graphics, border, Math.Max(3, Radius - inset), BorderThickness, BorderColor, BorderEndColor);
                     }
-                    using (System.Drawing.Drawing2D.LinearGradientBrush gradient = new System.Drawing.Drawing2D.LinearGradientBrush(border, BorderColor, BorderEndColor, 0f))
+                    else using (System.Drawing.Drawing2D.LinearGradientBrush gradient = new System.Drawing.Drawing2D.LinearGradientBrush(border, BorderColor, BorderEndColor, 0f))
                     {
-                        gradient.InterpolationColors = CollectionTheme.NeonBlend(255); gradient.GammaCorrection = true;
+                        int middleAlpha = Math.Max(BorderColor.A, BorderEndColor.A); gradient.InterpolationColors = new System.Drawing.Drawing2D.ColorBlend(3) { Colors = new Color[] { BorderColor, Color.FromArgb(middleAlpha, CollectionTheme.NeonIndigo), BorderEndColor }, Positions = new float[] { 0f, .52f, 1f } }; gradient.GammaCorrection = true;
                         using (Pen pen = new Pen(gradient, BorderThickness)) e.Graphics.DrawRoundedRectangle(pen, border, Math.Max(3, Radius - inset));
                     }
                 }
@@ -3058,11 +3213,35 @@ namespace DesktopFoldersDirect
             if (ShowSearchGlyph)
             {
                 float cx = 21f, cy = ClientSize.Height / 2f - 1f;
-                using (Pen pen = new Pen(GlyphColor, 1.7f))
-                {
-                    pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-                    e.Graphics.DrawEllipse(pen, cx - 6, cy - 6, 12, 12); e.Graphics.DrawLine(pen, cx + 4, cy + 4, cx + 9, cy + 9);
-                }
+                using (Pen pen = new Pen(GlyphColor, 1.7f)) { pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round; e.Graphics.DrawEllipse(pen, cx - 6, cy - 6, 12, 12); e.Graphics.DrawLine(pen, cx + 4, cy + 4, cx + 9, cy + 9); }
+            }
+        }
+        static void DrawContinuousPerimeter(Graphics graphics, Rectangle bounds, int radius, float thickness, Color leftColor, Color rightColor)
+        {
+            float left = bounds.Left, top = bounds.Top, right = bounds.Right, bottom = bounds.Bottom;
+            float curve = Math.Max(2f, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2f));
+            float topStart = left + bounds.Width * .65f, topEnd = left + bounds.Width * .85f;
+            float bottomStart = left + bounds.Width * .15f, bottomEnd = left + bounds.Width * .35f;
+            using (Pen leftPen = new Pen(leftColor, thickness))
+            using (Pen rightPen = new Pen(rightColor, thickness))
+            using (System.Drawing.Drawing2D.LinearGradientBrush topGradient = new System.Drawing.Drawing2D.LinearGradientBrush(new RectangleF(topStart, top - 2f, Math.Max(1f, topEnd - topStart), 4f), leftColor, rightColor, 0f))
+            using (System.Drawing.Drawing2D.LinearGradientBrush bottomGradient = new System.Drawing.Drawing2D.LinearGradientBrush(new RectangleF(bottomStart, bottom - 2f, Math.Max(1f, bottomEnd - bottomStart), 4f), leftColor, rightColor, 0f))
+            using (Pen topGradientPen = new Pen(topGradient, thickness))
+            using (Pen bottomGradientPen = new Pen(bottomGradient, thickness))
+            {
+                foreach (Pen pen in new Pen[] { leftPen, rightPen, topGradientPen, bottomGradientPen }) pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                graphics.DrawArc(leftPen, left, top, curve * 2f, curve * 2f, 180f, 90f);
+                graphics.DrawLine(leftPen, left + curve, top, topStart, top);
+                graphics.DrawLine(topGradientPen, topStart, top, topEnd, top);
+                graphics.DrawLine(rightPen, topEnd, top, right - curve, top);
+                graphics.DrawArc(rightPen, right - curve * 2f, top, curve * 2f, curve * 2f, 270f, 90f);
+                graphics.DrawLine(rightPen, right, top + curve, right, bottom - curve);
+                graphics.DrawArc(rightPen, right - curve * 2f, bottom - curve * 2f, curve * 2f, curve * 2f, 0f, 90f);
+                graphics.DrawLine(rightPen, right - curve, bottom, bottomEnd, bottom);
+                graphics.DrawLine(bottomGradientPen, bottomEnd, bottom, bottomStart, bottom);
+                graphics.DrawLine(leftPen, bottomStart, bottom, left + curve, bottom);
+                graphics.DrawArc(leftPen, left, bottom - curve * 2f, curve * 2f, curve * 2f, 90f, 90f);
+                graphics.DrawLine(leftPen, left, bottom - curve, left, top + curve);
             }
         }
     }
@@ -3071,6 +3250,7 @@ namespace DesktopFoldersDirect
     {
         bool isChecked;
         bool hot;
+        bool pressed;
 
         internal event EventHandler CheckedChanged;
 
@@ -3083,6 +3263,7 @@ namespace DesktopFoldersDirect
                 {
                     isChecked = value;
                     Invalidate();
+                    if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
                     var handler = CheckedChanged;
                     if (handler != null) handler(this, EventArgs.Empty);
                 }
@@ -3092,9 +3273,9 @@ namespace DesktopFoldersDirect
         internal ModernToggleSwitch()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.SupportsTransparentBackColor, true);
-            Size = new Size(46, 24);
+            Size = new Size(52, 36);
             Cursor = Cursors.Hand;
-            BackColor = Color.FromArgb(24, 32, 47);
+            BackColor = CollectionTheme.Surface;
             TabStop = true;
             AccessibleRole = AccessibleRole.CheckButton;
         }
@@ -3105,22 +3286,39 @@ namespace DesktopFoldersDirect
         {
             if (e.Button == MouseButtons.Left)
             {
-                Focus();
-                Checked = !Checked;
+                Focus(); pressed = true; Invalidate();
             }
             base.OnMouseDown(e);
         }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { pressed = false; Invalidate(); base.OnMouseCaptureChanged(e); }
+        protected override void OnMouseClick(MouseEventArgs e) { if (Enabled && e.Button == MouseButtons.Left) Checked = !Checked; base.OnMouseClick(e); }
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys key = keyData & Keys.KeyCode;
+            return key == Keys.Space || base.IsInputKey(keyData);
+        }
         protected override void OnKeyDown(KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)
+            if (Enabled && e.KeyCode == Keys.Space)
             {
                 Checked = !Checked;
-                e.Handled = true;
+                e.Handled = true; e.SuppressKeyPress = true;
             }
             base.OnKeyDown(e);
         }
         protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+        protected override void OnEnabledChanged(EventArgs e) { pressed = false; Invalidate(); base.OnEnabledChanged(e); }
+
+        protected override AccessibleObject CreateAccessibilityInstance() { return new ToggleAccessibleObject(this); }
+        sealed class ToggleAccessibleObject : ControlAccessibleObject
+        {
+            readonly ModernToggleSwitch owner;
+            internal ToggleAccessibleObject(ModernToggleSwitch control) : base(control) { owner = control; }
+            public override AccessibleStates State { get { return base.State | (owner.Checked ? AccessibleStates.Checked : AccessibleStates.None); } }
+            public override void DoDefaultAction() { if (owner.Enabled) owner.Checked = !owner.Checked; }
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -3128,18 +3326,20 @@ namespace DesktopFoldersDirect
             Color bg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : BackColor;
             using (Brush bgBrush = new SolidBrush(bg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
 
-            Rectangle track = new Rectangle(1, 2, Width - 3, Height - 5);
-            Color trackColor = isChecked
-                ? (hot ? Color.FromArgb(59, 130, 246) : Color.FromArgb(37, 99, 235))
-                : (hot ? Color.FromArgb(71, 85, 105) : Color.FromArgb(51, 65, 85));
+            Rectangle track = new Rectangle(4, (Height - 22) / 2, Width - 8, 22);
+            Color trackColor = !Enabled ? CollectionTheme.Control : (isChecked
+                ? (pressed ? CollectionTheme.SecondaryText : (hot ? CollectionTheme.Text : CollectionTheme.FocusBlue))
+                : (hot || pressed ? CollectionTheme.ControlActive : CollectionTheme.Control));
 
             using (Brush fill = new SolidBrush(trackColor))
                 e.Graphics.FillRoundedRectangle(fill, track, track.Height / 2);
+            if (!isChecked || !Enabled)
+                using (Pen border = new Pen(CollectionTheme.Stroke, 1f)) e.Graphics.DrawRoundedRectangle(border, track, track.Height / 2);
 
             if (Focused)
             {
-                using (Pen focusPen = new Pen(CollectionTheme.Focus, 1.5f))
-                    e.Graphics.DrawRoundedRectangle(focusPen, track, track.Height / 2);
+                using (Pen focusPen = new Pen(CollectionTheme.Focus, 2f))
+                    e.Graphics.DrawRoundedRectangle(focusPen, Rectangle.Inflate(track, 3, 3), track.Height / 2 + 3);
             }
 
             int thumbSize = track.Height - 4;
@@ -3147,7 +3347,7 @@ namespace DesktopFoldersDirect
             int thumbY = track.Top + 2;
             Rectangle thumb = new Rectangle(thumbX, thumbY, thumbSize, thumbSize);
 
-            using (Brush thumbFill = new SolidBrush(Color.White))
+            using (Brush thumbFill = new SolidBrush(!Enabled ? CollectionTheme.MutedText : (isChecked ? CollectionTheme.Background : CollectionTheme.Text)))
                 e.Graphics.FillEllipse(thumbFill, thumb);
         }
     }
@@ -3178,6 +3378,7 @@ namespace DesktopFoldersDirect
                 {
                     val = clamped;
                     Invalidate();
+                    if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
                     var handler = ValueChanged;
                     if (handler != null) handler(this, EventArgs.Empty);
                 }
@@ -3187,14 +3388,30 @@ namespace DesktopFoldersDirect
         internal ModernSlider()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.SupportsTransparentBackColor, true);
-            Size = new Size(200, 26);
+            Size = new Size(200, 36);
             Cursor = Cursors.Hand;
-            BackColor = Color.FromArgb(24, 32, 47);
+            BackColor = CollectionTheme.Surface;
             TabStop = true;
+            AccessibleRole = AccessibleRole.Slider;
+        }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new SliderAccessibleObject(this); }
+        sealed class SliderAccessibleObject : ControlAccessibleObject
+        {
+            readonly ModernSlider owner;
+            internal SliderAccessibleObject(ModernSlider slider) : base(slider) { owner = slider; }
+            public override string Value
+            {
+                get { return owner.Value.ToString(System.Globalization.CultureInfo.InvariantCulture); }
+                set { int requested; if (owner.Enabled && Int32.TryParse(value, out requested)) owner.Value = requested; }
+            }
         }
 
         protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; if (!dragging) Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+        protected override void OnEnabledChanged(EventArgs e) { if (!Enabled) { dragging = false; Capture = false; } Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { if (!Capture) dragging = false; Invalidate(); base.OnMouseCaptureChanged(e); }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
@@ -3222,16 +3439,25 @@ namespace DesktopFoldersDirect
             base.OnMouseUp(e);
         }
 
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys key = keyData & Keys.KeyCode;
+            return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Home || key == Keys.End || base.IsInputKey(keyData);
+        }
+
         protected override void OnKeyDown(KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Down) { Value -= step; e.Handled = true; }
             else if (e.KeyCode == Keys.Right || e.KeyCode == Keys.Up) { Value += step; e.Handled = true; }
+            else if (e.KeyCode == Keys.Home) { Value = min; e.Handled = true; }
+            else if (e.KeyCode == Keys.End) { Value = max; e.Handled = true; }
+            if (e.Handled) e.SuppressKeyPress = true;
             base.OnKeyDown(e);
         }
 
         void UpdateFromPointer(int pointerX)
         {
-            int pad = 10;
+            int pad = 14;
             int travel = Math.Max(1, Width - pad * 2);
             double fraction = Math.Max(0.0, Math.Min(1.0, (pointerX - pad) / (double)travel));
             Value = min + (int)Math.Round(fraction * (max - min));
@@ -3243,22 +3469,22 @@ namespace DesktopFoldersDirect
             Color bg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : BackColor;
             using (Brush bgBrush = new SolidBrush(bg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
 
-            int pad = 10;
+            int pad = 14;
             int trackY = Height / 2 - 3;
             int trackHeight = 6;
             int trackWidth = Math.Max(1, Width - pad * 2);
 
             Rectangle trackBg = new Rectangle(pad, trackY, trackWidth, trackHeight);
-            using (Brush bgFill = new SolidBrush(Color.FromArgb(51, 65, 85)))
+            using (Brush bgFill = new SolidBrush(CollectionTheme.Stroke))
                 e.Graphics.FillRoundedRectangle(bgFill, trackBg, 3);
 
-            double frac = (val - min) / (double)(max - min);
+            double frac = (val - min) / (double)Math.Max(1, max - min);
             int thumbX = pad + (int)Math.Round(frac * trackWidth);
 
             if (thumbX > pad)
             {
                 Rectangle activeTrack = new Rectangle(pad, trackY, thumbX - pad, trackHeight);
-                using (Brush activeFill = new SolidBrush(Color.FromArgb(59, 130, 246)))
+                using (Brush activeFill = new SolidBrush(Enabled ? CollectionTheme.FocusBlue : CollectionTheme.MutedText))
                     e.Graphics.FillRoundedRectangle(activeFill, activeTrack, 3);
             }
 
@@ -3268,15 +3494,17 @@ namespace DesktopFoldersDirect
             if (hot || dragging || Focused)
             {
                 Rectangle glow = Rectangle.Inflate(thumb, 3, 3);
-                using (Brush glowBrush = new SolidBrush(Color.FromArgb(50, 59, 130, 246)))
+                using (Brush glowBrush = new SolidBrush(Color.FromArgb(55, CollectionTheme.FocusBlue)))
                     e.Graphics.FillEllipse(glowBrush, glow);
             }
 
-            using (Brush thumbBrush = new SolidBrush(Color.White))
+            using (Brush thumbBrush = new SolidBrush(Enabled ? CollectionTheme.Text : CollectionTheme.MutedText))
                 e.Graphics.FillEllipse(thumbBrush, thumb);
 
-            using (Pen thumbPen = new Pen(Color.FromArgb(59, 130, 246), 2f))
+            using (Pen thumbPen = new Pen(Enabled ? CollectionTheme.FocusBlue : CollectionTheme.Stroke, 2f))
                 e.Graphics.DrawEllipse(thumbPen, thumb);
+            if (Focused)
+                using (Pen focusPen = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawEllipse(focusPen, Rectangle.Inflate(thumb, 5, 5));
         }
     }
 
@@ -3288,9 +3516,9 @@ namespace DesktopFoldersDirect
 
         internal ModernCard()
         {
-            Radius = 14;
-            CardColor = Color.FromArgb(24, 32, 47);
-            BorderColor = Color.FromArgb(51, 65, 85);
+            Radius = CollectionTheme.RadiusCard;
+            CardColor = CollectionTheme.Surface;
+            BorderColor = CollectionTheme.Border;
             DoubleBuffered = true;
             BackColor = CardColor;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
@@ -3318,6 +3546,7 @@ namespace DesktopFoldersDirect
     {
         bool isPrimary;
         bool hot;
+        bool pressed;
 
         internal bool IsPrimary
         {
@@ -3331,15 +3560,23 @@ namespace DesktopFoldersDirect
             isPrimary = primary;
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            Font = new Font("Segoe UI", 9.5f, primary ? FontStyle.Bold : FontStyle.Regular);
             Cursor = Cursors.Hand;
-            BackColor = primary ? Color.FromArgb(59, 130, 246) : Color.FromArgb(30, 41, 59);
-            ForeColor = Color.White;
+            BackColor = primary ? CollectionTheme.FocusBlue : CollectionTheme.Control;
+            ForeColor = primary ? CollectionTheme.Background : CollectionTheme.Text;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         }
 
         protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { pressed = true; Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { pressed = false; Invalidate(); base.OnMouseCaptureChanged(e); }
+        protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter) { pressed = true; Invalidate(); } base.OnKeyDown(e); }
+        protected override void OnKeyUp(KeyEventArgs e) { pressed = false; Invalidate(); base.OnKeyUp(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { pressed = false; Invalidate(); base.OnLostFocus(e); }
+        protected override void OnEnabledChanged(EventArgs e) { pressed = false; Invalidate(); base.OnEnabledChanged(e); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -3347,11 +3584,11 @@ namespace DesktopFoldersDirect
             Color parentBg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : CollectionTheme.Background;
             using (Brush bgBrush = new SolidBrush(parentBg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
 
-            Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
-            Color bg = isPrimary
-                ? (hot ? Color.FromArgb(96, 165, 250) : Color.FromArgb(59, 130, 246))
-                : (hot ? Color.FromArgb(51, 65, 85) : Color.FromArgb(30, 41, 59));
-            Color border = isPrimary ? Color.FromArgb(59, 130, 246) : Color.FromArgb(71, 85, 105);
+            Rectangle rect = new Rectangle(1, 1, Width - 3, Height - 3);
+            Color bg = !Enabled ? CollectionTheme.Control : (isPrimary
+                ? (pressed ? CollectionTheme.SecondaryText : (hot ? CollectionTheme.Text : CollectionTheme.FocusBlue))
+                : (pressed ? CollectionTheme.ControlActive : (hot ? CollectionTheme.SurfaceHover : CollectionTheme.Control)));
+            Color border = isPrimary && Enabled ? bg : CollectionTheme.Stroke;
 
             using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(rect, 8))
             {
@@ -3361,18 +3598,36 @@ namespace DesktopFoldersDirect
                     e.Graphics.DrawPath(pen, path);
             }
 
-            using (StringFormat sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            using (Brush textBrush = new SolidBrush(ForeColor))
-            {
-                e.Graphics.DrawString(Text, Font, textBrush, rect, sf);
-            }
+            TextRenderer.DrawText(e.Graphics, Text, Font, rect, !Enabled ? CollectionTheme.MutedText : (isPrimary ? CollectionTheme.Background : ForeColor), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
             if (Focused)
             {
                 Rectangle fRect = Rectangle.Inflate(rect, -2, -2);
                 using (System.Drawing.Drawing2D.GraphicsPath fPath = DrawExtensions.RoundPath(fRect, 6))
-                using (Pen fPen = new Pen(CollectionTheme.Focus, 1.5f))
+                using (Pen fPen = new Pen(isPrimary ? CollectionTheme.Background : CollectionTheme.Focus, 2f))
                     e.Graphics.DrawPath(fPen, fPath);
+            }
+        }
+    }
+
+    internal sealed class ThemedComboBox : ComboBox
+    {
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            bool printing = message.Msg == 0x0317 || message.Msg == 0x0318;
+            if ((message.Msg != 0x000F && !printing) || Width < 24 || Height < 8) return;
+            using (Graphics graphics = printing ? Graphics.FromHdc(message.WParam) : Graphics.FromHwnd(Handle))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                int arrowWidth = Math.Max(24, SystemInformation.VerticalScrollBarWidth + 8);
+                Rectangle arrow = new Rectangle(Width - arrowWidth, 1, arrowWidth - 1, Height - 2);
+                using (Brush fill = new SolidBrush(CollectionTheme.Control)) graphics.FillRectangle(fill, arrow);
+                using (Pen edge = new Pen(Focused ? CollectionTheme.Focus : CollectionTheme.Stroke, Focused ? 2f : 1f)) graphics.DrawRectangle(edge, 1, 1, Width - 3, Height - 3);
+                int x = arrow.Left + arrow.Width / 2, y = Height / 2;
+                using (Pen glyph = new Pen(Enabled ? CollectionTheme.SecondaryText : CollectionTheme.MutedText, 1.5f)) graphics.DrawLines(glyph, new Point[] { new Point(x - 4, y - 2), new Point(x, y + 2), new Point(x + 4, y - 2) });
             }
         }
     }
@@ -3393,23 +3648,36 @@ namespace DesktopFoldersDirect
             controller = owner;
             Text = Loc.Get("settings.window_title");
             StartPosition = FormStartPosition.CenterScreen;
-            Size = new Size(520, 680);
+            AutoScaleDimensions = new SizeF(96f, 96f);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(600, Math.Min(844, Math.Max(480, Screen.FromPoint(Cursor.Position).WorkingArea.Height - 40)));
             FormBorderStyle = FormBorderStyle.None;
+            Font = new Font("Segoe UI", 9f);
             BackColor = CollectionTheme.Background;
             ForeColor = CollectionTheme.Text;
             ShowInTaskbar = true;
             DoubleBuffered = true;
             KeyPreview = true;
 
+            Panel body = new BufferedPanel { Dock = DockStyle.Fill, Size = new Size(600, 688), Padding = new Padding(24, 8, 32, 8), BackColor = CollectionTheme.Background, TabIndex = 0 };
+            Panel viewport = new BufferedPanel { Dock = DockStyle.Fill, BackColor = CollectionTheme.Background };
+            Panel content = new BufferedPanel { Location = Point.Empty, Size = new Size(552, 716), BackColor = CollectionTheme.Background };
+            DarkScrollBar settingsScroll = new DarkScrollBar(viewport, content) { Width = 12, Height = 672, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right };
+            viewport.Controls.Add(content); body.Controls.Add(viewport); body.Controls.Add(settingsScroll);
+            viewport.Resize += delegate { content.Width = Math.Max(300, viewport.ClientSize.Width - 8); settingsScroll.SyncFromTarget(); };
+            body.Resize += delegate { settingsScroll.Bounds = new Rectangle(body.Width - 24, 8, 12, Math.Max(24, body.ClientSize.Height - 16)); settingsScroll.SyncFromTarget(); };
+            Controls.Add(body);
+
             // Header draggable bar
-            Panel header = new Panel { Location = new Point(0, 0), Size = new Size(520, 52), BackColor = Color.Transparent };
+            Panel header = new Panel { Dock = DockStyle.Top, Size = new Size(600, 72), BackColor = CollectionTheme.Background, TabIndex = 2 };
             Icon appIcon = null;
             try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             if (appIcon == null) appIcon = SystemIcons.Application;
-            PictureBox iconBox = new PictureBox { Image = appIcon.ToBitmap(), SizeMode = PictureBoxSizeMode.StretchImage, Location = new Point(20, 14), Size = new Size(24, 24), BackColor = Color.Transparent };
-            Label titleLabel = new Label { Text = Loc.Get("settings.title"), Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(52, 16), AutoSize = true, BackColor = Color.Transparent };
-            Label badgeLabel = new Label { Text = "v6.0", Font = new Font("Segoe UI", 8f, FontStyle.Bold), ForeColor = CollectionTheme.MutedText, BackColor = Color.FromArgb(30, 41, 59), Location = new Point(236, 18), AutoSize = true, Padding = new Padding(4, 1, 4, 1) };
-            HeaderIconButton closeBtn = new HeaderIconButton(HeaderIconKind.Close, 34) { Location = new Point(520 - 46, 9), Size = new Size(34, 34), BackColor = Color.Transparent };
+            PictureBox iconBox = new PictureBox { Image = appIcon.ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom, Location = new Point(24, 20), Size = new Size(32, 32), BackColor = Color.Transparent, TabStop = false };
+            if (appIcon != SystemIcons.Application) appIcon.Dispose();
+            FormClosed += delegate { if (iconBox.Image != null) { iconBox.Image.Dispose(); iconBox.Image = null; } };
+            Label titleLabel = new Label { Text = Loc.Get("settings.title"), Font = new Font("Segoe UI", 14f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(68, 20), Size = new Size(380, 32), TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.Transparent };
+            HeaderIconButton closeBtn = new HeaderIconButton(HeaderIconKind.Close, 40) { Location = new Point(536, 16), Size = new Size(40, 40), Anchor = AnchorStyles.Top | AnchorStyles.Right, AccessibleName = Loc.Get("settings.button.close") };
             closeBtn.Click += delegate { Close(); };
 
             Point dragStart = Point.Empty;
@@ -3420,7 +3688,7 @@ namespace DesktopFoldersDirect
             header.MouseDown += onHeaderDown; header.MouseMove += onHeaderMove; header.MouseUp += onHeaderUp;
             titleLabel.MouseDown += onHeaderDown; titleLabel.MouseMove += onHeaderMove; titleLabel.MouseUp += onHeaderUp;
             iconBox.MouseDown += onHeaderDown; iconBox.MouseMove += onHeaderMove; iconBox.MouseUp += onHeaderUp;
-            header.Controls.AddRange(new Control[] { iconBox, titleLabel, badgeLabel, closeBtn });
+            header.Controls.AddRange(new Control[] { iconBox, titleLabel, closeBtn });
             Controls.Add(header);
 
             int hoverDelay = (controller != null && controller.Settings != null) ? controller.Settings.FolderHoverDelay : 280;
@@ -3430,14 +3698,14 @@ namespace DesktopFoldersDirect
             string language = (controller != null && controller.Settings != null) ? controller.Settings.Language : "system";
 
             // Card 1: Thao tác & Kéo thả
-            Label sec1 = CreateSectionHeader(Loc.Get("settings.section.behavior"), 56);
-            Controls.Add(sec1);
+            Label sec1 = CreateSectionHeader(Loc.Get("settings.section.behavior"), 0);
+            content.Controls.Add(sec1);
 
-            ModernCard card1 = new ModernCard { Location = new Point(25, 78), Size = new Size(470, 142) };
-            Label delayTitle = new Label { Text = Loc.Get("settings.drag_delay.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            Label delaySub = new Label { Text = Loc.Get("settings.drag_delay.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(300, 18), BackColor = Color.Transparent };
-            delayBadge = new Label { Size = new Size(130, 22), Location = new Point(326, 12), Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = Color.FromArgb(96, 165, 250), TextAlign = ContentAlignment.MiddleRight, BackColor = Color.Transparent };
-            delaySlider = new ModernSlider { Minimum = 120, Maximum = 800, Step = 20, Value = Math.Max(120, Math.Min(800, hoverDelay)), Location = new Point(14, 56), Size = new Size(442, 26) };
+            ModernCard card1 = new ModernCard { Location = new Point(0, 28), Size = new Size(552, 192), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, TabIndex = 0 };
+            Label delayTitle = CreateSettingLabel("settings.drag_delay.title", 16, 14, 352, 22, true);
+            Label delaySub = CreateSettingLabel("settings.drag_delay.description", 16, 40, 520, 32, false);
+            delayBadge = new Label { Size = new Size(160, 24), Location = new Point(376, 14), Font = new Font("Segoe UI", 9f, FontStyle.Bold), ForeColor = CollectionTheme.FocusBlue, TextAlign = ContentAlignment.MiddleRight, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            delaySlider = new ModernSlider { Minimum = 120, Maximum = 800, Step = 20, Value = Math.Max(120, Math.Min(800, hoverDelay)), Location = new Point(16, 74), Size = new Size(520, 36), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, TabIndex = 0, AccessibleName = delayTitle.Text, AccessibleDescription = delaySub.Text };
             Action updateBadge = delegate {
                 int ms = delaySlider.Value;
                 string desc = ms <= 200 ? Loc.Get("settings.drag_delay.fast") : (ms <= 340 ? Loc.Get("settings.drag_delay.default") : Loc.Get("settings.drag_delay.slow"));
@@ -3446,69 +3714,129 @@ namespace DesktopFoldersDirect
             delaySlider.ValueChanged += delegate { updateBadge(); };
             updateBadge();
 
-            Panel div1 = new Panel { Location = new Point(14, 88), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            Label disTitle = new Label { Text = Loc.Get("settings.dissolve.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 98), AutoSize = true, BackColor = Color.Transparent };
-            Label disSub = new Label { Text = Loc.Get("settings.dissolve.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 118), Size = new Size(380, 18), BackColor = Color.Transparent };
-            dissolveSwitch = new ModernToggleSwitch { Checked = dissolve, Location = new Point(410, 102) };
+            Panel div1 = CreateDivider(114);
+            Label disTitle = CreateSettingLabel("settings.dissolve.title", 16, 124, 444, 22, true);
+            Label disSub = CreateSettingLabel("settings.dissolve.description", 16, 150, 444, 32, false);
+            dissolveSwitch = new ModernToggleSwitch { Checked = dissolve, Location = new Point(484, 134), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 1, AccessibleName = disTitle.Text, AccessibleDescription = disSub.Text };
             card1.Controls.AddRange(new Control[] { delayTitle, delaySub, delayBadge, delaySlider, div1, disTitle, disSub, dissolveSwitch });
-            Controls.Add(card1);
+            content.Controls.Add(card1);
 
             // Card 2: Hệ thống & Hiệu năng
-            Label sec2 = CreateSectionHeader(Loc.Get("settings.section.system"), 232);
-            Controls.Add(sec2);
+            Label sec2 = CreateSectionHeader(Loc.Get("settings.section.system"), 236);
+            content.Controls.Add(sec2);
 
-            ModernCard card2 = new ModernCard { Location = new Point(25, 254), Size = new Size(470, 182) };
-            Label startTitle = new Label { Text = Loc.Get("settings.startup.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            Label startSub = new Label { Text = Loc.Get("settings.startup.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 32), Size = new Size(380, 18), BackColor = Color.Transparent };
-            startupSwitch = new ModernToggleSwitch { Checked = startWin, Location = new Point(410, 18) };
+            ModernCard card2 = new ModernCard { Location = new Point(0, 264), Size = new Size(552, 224), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, TabIndex = 1 };
+            Label startTitle = CreateSettingLabel("settings.startup.title", 16, 14, 444, 22, true);
+            Label startSub = CreateSettingLabel("settings.startup.description", 16, 40, 444, 32, false);
+            startupSwitch = new ModernToggleSwitch { Checked = startWin, Location = new Point(484, 24), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 0, AccessibleName = startTitle.Text, AccessibleDescription = startSub.Text };
 
-            Panel div2 = new Panel { Location = new Point(14, 60), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            Label redTitle = new Label { Text = Loc.Get("settings.reduce_motion.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 70), AutoSize = true, BackColor = Color.Transparent };
-            Label redSub = new Label { Text = Loc.Get("settings.reduce_motion.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 90), Size = new Size(380, 18), BackColor = Color.Transparent };
-            reduceSwitch = new ModernToggleSwitch { Checked = reduceMotion, Location = new Point(410, 76) };
+            Panel div2 = CreateDivider(78);
+            Label redTitle = CreateSettingLabel("settings.reduce_motion.title", 16, 90, 444, 22, true);
+            Label redSub = CreateSettingLabel("settings.reduce_motion.description", 16, 116, 444, 32, false);
+            reduceSwitch = new ModernToggleSwitch { Checked = reduceMotion, Location = new Point(484, 100), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 1, AccessibleName = redTitle.Text, AccessibleDescription = redSub.Text };
 
-            Panel divLang = new Panel { Location = new Point(14, 118), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            Label langTitle = new Label { Text = Loc.Get("settings.language.title"), Font = new Font("Segoe UI", 10f, FontStyle.Bold), ForeColor = CollectionTheme.Text, Location = new Point(14, 128), AutoSize = true, BackColor = Color.Transparent };
-            Label langSub = new Label { Text = Loc.Get("settings.language.description"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(14, 148), Size = new Size(290, 18), BackColor = Color.Transparent };
-            langCombo = new ComboBox { Location = new Point(310, 134), Size = new Size(146, 28), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 9.5f), BackColor = Color.FromArgb(30, 41, 59), ForeColor = CollectionTheme.Text, FlatStyle = FlatStyle.Flat };
+            Panel divLang = CreateDivider(154);
+            Label langTitle = CreateSettingLabel("settings.language.title", 16, 166, 310, 22, true);
+            Label langSub = CreateSettingLabel("settings.language.description", 16, 192, 310, 22, false);
+            langCombo = new ThemedComboBox { Location = new Point(346, 174), Size = new Size(190, 34), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 10f), BackColor = CollectionTheme.Control, ForeColor = CollectionTheme.Text, FlatStyle = FlatStyle.Flat, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 2, AccessibleName = langTitle.Text, AccessibleDescription = langSub.Text };
+            langCombo.DrawItem += delegate(object sender, DrawItemEventArgs e) {
+                if (e.Index < 0) return;
+                bool selected = (e.State & DrawItemState.Selected) != 0;
+                using (Brush fill = new SolidBrush(selected ? CollectionTheme.ControlActive : CollectionTheme.Control)) e.Graphics.FillRectangle(fill, e.Bounds);
+                Rectangle textBounds = new Rectangle(e.Bounds.X + 8, e.Bounds.Y, e.Bounds.Width - 16, e.Bounds.Height);
+                TextRenderer.DrawText(e.Graphics, langCombo.Items[e.Index].ToString(), langCombo.Font, textBounds, CollectionTheme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                if ((e.State & DrawItemState.Focus) != 0) using (Pen focus = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawRectangle(focus, e.Bounds.X + 1, e.Bounds.Y + 1, e.Bounds.Width - 3, e.Bounds.Height - 3);
+            };
             langCombo.Items.AddRange(new object[] { Loc.Get("settings.language.system"), "English", "Tiếng Việt" });
             if (String.Equals(language, "en", StringComparison.OrdinalIgnoreCase)) langCombo.SelectedIndex = 1;
             else if (String.Equals(language, "vi", StringComparison.OrdinalIgnoreCase)) langCombo.SelectedIndex = 2;
             else langCombo.SelectedIndex = 0;
 
             card2.Controls.AddRange(new Control[] { startTitle, startSub, startupSwitch, div2, redTitle, redSub, reduceSwitch, divLang, langTitle, langSub, langCombo });
-            Controls.Add(card2);
+            content.Controls.Add(card2);
 
             // Card 3: Chẩn đoán Desktop Explorer
-            Label sec3 = CreateSectionHeader(Loc.Get("settings.section.diagnostics"), 448);
-            Controls.Add(sec3);
+            Label sec3 = CreateSectionHeader(Loc.Get("settings.section.diagnostics"), 504);
+            content.Controls.Add(sec3);
 
-            ModernCard card3 = new ModernCard { Location = new Point(25, 470), Size = new Size(470, 128) };
-            Label connLabel = new Label { Text = Loc.Get("settings.diagnostics.connection"), Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.FromArgb(52, 211, 153), Location = new Point(14, 12), AutoSize = true, BackColor = Color.Transparent };
-            ModernButton rescanBtn = new ModernButton(Loc.Get("settings.diagnostics.refresh"), false) { Location = new Point(318, 10), Size = new Size(138, 28) };
-            rescanBtn.Click += delegate { if (controller != null) controller.RefreshNow(); targetStatus.Text = ExplorerDesktop.ScanStatus; };
-            Panel div3 = new Panel { Location = new Point(14, 44), Size = new Size(442, 1), BackColor = Color.FromArgb(45, 57, 77) };
-            targetStatus = new Label { Text = ExplorerDesktop.ScanStatus, AutoSize = false, Size = new Size(442, 70), Location = new Point(14, 52), Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(148, 163, 184), BackColor = Color.Transparent };
+            ModernCard card3 = new ModernCard { Location = new Point(0, 532), Size = new Size(552, 184), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, TabIndex = 2 };
+            Label connLabel = CreateSettingLabel("settings.diagnostics.connection", 16, 14, 520, 24, true);
+            ModernButton rescanBtn = new ModernButton(Loc.Get("settings.diagnostics.refresh"), false) { Location = new Point(366, 136), Size = new Size(170, 36), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 0 };
+            ToolTip statusTips = new ToolTip { AutoPopDelay = 15000 };
+            FormClosed += delegate { statusTips.Dispose(); };
+            rescanBtn.Click += delegate {
+                rescanBtn.Enabled = false; rescanBtn.Text = Loc.Get("settings.diagnostics.refreshing");
+                ThreadPool.QueueUserWorkItem(delegate {
+                    string status;
+                    try { if (controller != null) controller.RefreshNow(); status = ExplorerDesktop.ScanStatus; }
+                    catch (Exception error) { status = Loc.Get("diagnostics.scan_error", error.Message); }
+                    if (IsDisposed || !IsHandleCreated) return;
+                    try { BeginInvoke(new Action(delegate {
+                        if (IsDisposed) return;
+                        targetStatus.Text = status; statusTips.SetToolTip(targetStatus, status); rescanBtn.Text = Loc.Get("settings.diagnostics.refresh"); rescanBtn.Enabled = true;
+                    })); } catch (InvalidOperationException) { }
+                });
+            };
+            Panel div3 = CreateDivider(46);
+            targetStatus = new Label { Text = ExplorerDesktop.ScanStatus, AutoSize = false, AutoEllipsis = true, Size = new Size(520, 76), Location = new Point(16, 54), Font = new Font("Segoe UI", 9f), ForeColor = CollectionTheme.SecondaryText, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, AccessibleName = connLabel.Text };
+            statusTips.SetToolTip(targetStatus, targetStatus.Text);
             card3.Controls.AddRange(new Control[] { connLabel, rescanBtn, div3, targetStatus });
-            Controls.Add(card3);
+            content.Controls.Add(card3);
 
             // Footer
-            Label tip = new Label { Text = Loc.Get("settings.footer.tip"), Font = new Font("Segoe UI", 8.5f), ForeColor = Color.FromArgb(100, 116, 139), Location = new Point(28, 626), AutoSize = true, BackColor = Color.Transparent };
-            ModernButton cancelBtn = new ModernButton(Loc.Get("settings.button.close"), false) { Location = new Point(292, 618), Size = new Size(88, 36) };
+            Panel footer = new Panel { Dock = DockStyle.Bottom, Size = new Size(600, 84), BackColor = CollectionTheme.Background, TabIndex = 1 };
+            Panel footerLine = new Panel { Location = new Point(24, 0), Size = new Size(552, 1), BackColor = CollectionTheme.Border, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            Label tip = new Label { Text = Loc.Get("settings.footer.tip"), Font = new Font("Segoe UI", 8.5f), ForeColor = CollectionTheme.MutedText, Location = new Point(24, 58), Size = new Size(552, 20), TextAlign = ContentAlignment.MiddleRight, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            ModernButton cancelBtn = new ModernButton(Loc.Get("settings.button.close"), false) { Location = new Point(316, 12), Size = new Size(108, 40), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 0, DialogResult = DialogResult.Cancel };
             cancelBtn.Click += delegate { Close(); };
-            ModernButton saveBtn = new ModernButton(Loc.Get("settings.button.save"), true) { Location = new Point(390, 618), Size = new Size(105, 36) };
+            ModernButton saveBtn = new ModernButton(Loc.Get("settings.button.save"), true) { Location = new Point(436, 12), Size = new Size(140, 40), Anchor = AnchorStyles.Top | AnchorStyles.Right, TabIndex = 1 };
             saveBtn.Click += delegate { Apply(); Close(); };
-            Controls.AddRange(new Control[] { tip, cancelBtn, saveBtn });
+            footer.Controls.AddRange(new Control[] { footerLine, tip, cancelBtn, saveBtn });
+            Controls.Add(footer);
+            foreach (Control row in content.Controls) row.Width = Math.Max(100, content.ClientSize.Width - row.Left);
+            BindScrollFocus(content, viewport, settingsScroll);
+            AcceptButton = saveBtn;
+            CancelButton = cancelBtn;
+            Shown += delegate {
+                Rectangle area = Screen.FromControl(this).WorkingArea;
+                Size bounded = new Size(Math.Min(Width, area.Width - 32), Math.Min(Height, area.Height - 32));
+                if (bounded != Size) { Size = bounded; Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2); }
+                settingsScroll.Bounds = new Rectangle(body.Width - 24, 8, 12, Math.Max(24, body.ClientSize.Height - 16)); settingsScroll.SyncFromTarget(); settingsScroll.SetValue(0);
+                delaySlider.Focus();
+            };
 
             KeyDown += delegate(object sender, KeyEventArgs e) {
-                if (e.KeyCode == Keys.Escape) { Close(); e.Handled = true; }
-                else if (e.KeyCode == Keys.Enter) { Apply(); Close(); e.Handled = true; }
+                if (e.KeyCode == Keys.Escape && !langCombo.DroppedDown) { Close(); e.Handled = true; e.SuppressKeyPress = true; }
             };
         }
 
         Label CreateSectionHeader(string text, int y)
         {
-            return new Label { Text = text, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), ForeColor = Color.FromArgb(148, 163, 184), Location = new Point(28, y), AutoSize = true, BackColor = Color.Transparent };
+            return new Label { Text = text, UseMnemonic = false, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), ForeColor = CollectionTheme.MutedText, Location = new Point(4, y), Size = new Size(544, 20), TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+        }
+
+        static void BindScrollFocus(Control control, Panel viewport, DarkScrollBar scroll)
+        {
+            if (control.TabStop && !(control is Panel)) control.Enter += delegate {
+                int top = viewport.PointToClient(control.PointToScreen(Point.Empty)).Y;
+                if (top < 0) scroll.ScrollBy(top - 8);
+                else if (top + control.Height > viewport.Height) scroll.ScrollBy(top + control.Height - viewport.Height + 8);
+            };
+            foreach (Control child in control.Controls)
+            {
+                if (!(child is ComboBox) && !(child is ModernSlider)) child.MouseWheel += delegate(object sender, MouseEventArgs e) { scroll.ScrollBy(-(e.Delta / 120) * 70); };
+                BindScrollFocus(child, viewport, scroll);
+            }
+        }
+
+        Label CreateSettingLabel(string key, int x, int y, int width, int height, bool title)
+        {
+            return new Label { Text = Loc.Get(key), Font = new Font("Segoe UI", title ? 10f : 9f, title ? FontStyle.Bold : FontStyle.Regular), ForeColor = title ? CollectionTheme.Text : CollectionTheme.SecondaryText, Location = new Point(x, y), Size = new Size(width, height), BackColor = Color.Transparent, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+        }
+
+        Panel CreateDivider(int y)
+        {
+            return new Panel { Location = new Point(16, y), Size = new Size(520, 1), BackColor = CollectionTheme.Border, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
         }
 
         void Apply()
@@ -3610,7 +3938,7 @@ namespace DesktopFoldersDirect
 
             Icon appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             tray = new NotifyIcon { Icon = appIcon, Visible = false, Text = Loc.Get("tray.tooltip") };
-            ContextMenuStrip menu = new ContextMenuStrip();
+            ContextMenuStrip menu = CollectionTheme.CreateMenu();
             menu.Items.Add(Loc.Get("tray.status_active")).Enabled = false;
             menu.Items.Add(Loc.Get("tray.settings"), null, delegate { OpenSettings(); });
             menu.Items.Add(new ToolStripSeparator());
@@ -3752,19 +4080,27 @@ namespace DesktopFoldersDirect
             DataStore.SaveVirtualLayout(layout);
         }
 
-        void RefreshCache()
+        bool RefreshCache()
         {
-            if (Interlocked.Exchange(ref scanInProgress, 1) != 0) return;
+            if (Interlocked.Exchange(ref scanInProgress, 1) != 0) return false;
             try
             {
                 DesktopItem[] fresh = ExplorerDesktop.Scan();
                 lock (cacheLock) cache = fresh;
                 FolderPanel.SyncDesktopItems(fresh);
+                return true;
             }
             finally { Interlocked.Exchange(ref scanInProgress, 0); }
         }
 
-        internal void RefreshNow() { RefreshCache(); }
+        internal void RefreshNow()
+        {
+            for (int attempt = 0; attempt < 6; attempt++)
+            {
+                if (RefreshCache()) return;
+                Thread.Sleep(50);
+            }
+        }
 
         DesktopItem Hit(Point point)
         {
