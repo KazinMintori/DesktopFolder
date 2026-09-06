@@ -188,11 +188,11 @@ internal static class PreviewHarness
         string[] names = language == "vi" ? new string[] {
             "Visual Studio Code.lnk", "Tài liệu thiết kế giao diện và trải nghiệm người dùng.pdf", "Báo cáo tháng chín.xlsx",
             "Figma.lnk", "Hình nền bộ sưu tập.png", "Microsoft Edge.lnk", "Ghi chú cuộc họp.txt", "Ứng dụng kiểm thử.exe",
-            "Kế hoạch phát triển DesktopFolders quý tiếp theo.docx", "Nhạc thư giãn.mp3", "DirectDesktopFolders.cs", "Bản trình bày dự án.pptx"
+            "Kế hoạch phát triển DesktopFolders quý tiếp theo.docx", "Nhạc thư giãn.mp3", "DesktopFolders.cs", "Bản trình bày dự án.pptx"
         } : new string[] {
             "Visual Studio Code.lnk", "Interface design and user experience reference guide.pdf", "September report.xlsx",
             "Figma.lnk", "Collection wallpaper.png", "Microsoft Edge.lnk", "Meeting notes.txt", "Test application.exe",
-            "DesktopFolders development roadmap for the next quarter.docx", "Focus music.mp3", "DirectDesktopFolders.cs", "Project presentation.pptx"
+            "DesktopFolders development roadmap for the next quarter.docx", "Focus music.mp3", "DesktopFolders.cs", "Project presentation.pptx"
         };
         List<object> members = new List<object>();
         List<string> pinned = new List<string>();
@@ -300,7 +300,7 @@ internal static class PreviewHarness
     static void DirectPaint(Control control, Bitmap image)
     {
         using (Graphics graphics = Graphics.FromImage(image))
-        using (PaintEventArgs paint = new PaintEventArgs(graphics, control.ClientRectangle)) Call(control, "OnPaint", paint);
+        using (PaintEventArgs paint = new PaintEventArgs(graphics, control.ClientRectangle)) { Call(control, "OnPaintBackground", paint); Call(control, "OnPaint", paint); }
     }
 
     static bool TransitionClears(Control control, Action firstState, Action finalState)
@@ -321,6 +321,20 @@ internal static class PreviewHarness
         return true;
     }
 
+    static bool StableComboItemRender(ComboBox combo, DrawItemState state, int repaintCount)
+    {
+        ulong expected = 0;
+        for (int repaint = 0; repaint < repaintCount; repaint++)
+        using (Bitmap image = new Bitmap(Math.Max(1, combo.DropDownWidth), combo.ItemHeight))
+        using (Graphics graphics = Graphics.FromImage(image))
+        {
+            graphics.Clear(combo.BackColor);
+            Call(combo, "OnDrawItem", new DrawItemEventArgs(graphics, combo.Font, new Rectangle(0, 0, image.Width, image.Height), 0, state, combo.ForeColor, combo.BackColor));
+            ulong signature = BitmapSignature(image); if (repaint == 0) expected = signature; else if (signature != expected) return false;
+        }
+        return true;
+    }
+
     static void VerifyInteractions(string language)
     {
         using (Form form = CreatePreview("compact", language))
@@ -332,7 +346,7 @@ internal static class PreviewHarness
             Require(Math.Abs((float)search.Parent.GetType().GetProperty("BorderThickness", Members).GetValue(search.Parent, null) - 2f) < .01f && (int)search.Parent.GetType().GetProperty("Radius", Members).GetValue(search.Parent, null) == 12, language + ": restored search geometry with focused color");
             Require(System.Linq.Enumerable.All(Descendants(form), item => item.GetType().Name != "HeaderIconButton" || (item.Parent != null && item.Parent.ClientRectangle.Contains(item.Bounds))), language + ": collection buttons stay inside their containers");
             Control actionGroup = (Control)Get(form, "modes"); Rectangle actionBounds = form.RectangleToClient(actionGroup.RectangleToScreen(actionGroup.ClientRectangle)); Rectangle searchBounds = form.RectangleToClient(search.Parent.RectangleToScreen(search.Parent.ClientRectangle));
-            Require(actionGroup.Size == new Size(140, 44) && System.Linq.Enumerable.Count(Descendants(actionGroup), item => item.GetType().Name == "HeaderIconButton" && item.Size == new Size(32, 36)) == 4 && searchBounds.Top - actionBounds.Bottom >= 6, language + ": four collection actions have a framed group separated from search");
+            Require(actionGroup.Size == new Size(140, 44) && actionGroup.BackColor.A == 72 && Math.Abs((float)actionGroup.GetType().GetProperty("BorderThickness", Members).GetValue(actionGroup, null) - 2f) < .01f && (bool)actionGroup.GetType().GetProperty("ContinuousPerimeterGradient", Members).GetValue(actionGroup, null) && System.Linq.Enumerable.Count(Descendants(actionGroup), item => item.GetType().Name == "HeaderIconButton" && item.Size == new Size(32, 36)) == 4, language + ": four collection actions have a softened glass search-gradient group");
             Require(Math.Abs(actionBounds.Right - searchBounds.Right) <= 1, language + ": action strip right edge aligns with search bar");
             Control title = (Control)Get(form, "titleLabel"); Rectangle titleBounds = form.RectangleToClient(title.RectangleToScreen(title.ClientRectangle));
             Require(titleBounds.Right <= actionBounds.Left && Math.Abs((titleBounds.Top + titleBounds.Height / 2) - (actionBounds.Top + actionBounds.Height / 2)) <= 1, language + ": title aligns with actions without overlap");
@@ -367,16 +381,18 @@ internal static class PreviewHarness
             Cursor.Position = new Point(Math.Max(0, form.Left - 20), Math.Max(0, form.Top - 20)); firstTile.Focus(); Application.DoEvents(); Require(Math.Abs((float)search.Parent.GetType().GetProperty("BorderThickness", Members).GetValue(search.Parent, null) - 2f) < .01f, language + ": idle search keeps original border geometry"); Capture(form, language + "-search-idle");
             Call(search, "OnMouseEnter", EventArgs.Empty); Require(Math.Abs((float)search.Parent.GetType().GetProperty("BorderThickness", Members).GetValue(search.Parent, null) - 2f) < .01f, language + ": hover changes no search geometry"); Application.DoEvents(); Capture(form, language + "-search-hover"); Call(search, "OnMouseLeave", EventArgs.Empty);
             Control scrollBar = System.Linq.Enumerable.First(Descendants(form), item => item.GetType().Name == "DarkScrollBar");
+            Set(scrollBar, "hot", false); Set(scrollBar, "activityVisible", false);
             Rectangle idleThumb = (Rectangle)Call(scrollBar, "ThumbRectangle"); Require(idleThumb.Width == 4, language + ": idle scrollbar thumb width");
             Call(scrollBar, "OnMouseEnter", EventArgs.Empty); Application.DoEvents(); Rectangle activeThumb = (Rectangle)Call(scrollBar, "ThumbRectangle"); Require(activeThumb.Width == 5, language + ": active scrollbar thumb width"); Capture(form, language + "-scroll-hover"); Call(scrollBar, "OnMouseLeave", EventArgs.Empty);
             Control list = (Control)Get(form, "listButton"), grid = (Control)Get(form, "gridButton");
             list.Focus(); Call(list, "OnKeyDown", new KeyEventArgs(Keys.Space)); Call(list, "OnKeyUp", new KeyEventArgs(Keys.Space)); Application.DoEvents();
-            Require(!(bool)Get(form, "gridMode") && (list.AccessibilityObject.State & AccessibleStates.Pressed) != 0, language + ": list selection is exposed");
+            Require(!(bool)Get(form, "gridMode") && (list.AccessibilityObject.State & AccessibleStates.Pressed) != 0 && (bool)Get(list, "keyboardFocus"), language + ": list selection and keyboard focus are exposed");
             Call(grid, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, grid.Width / 2, grid.Height / 2, 0)); Call(grid, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, grid.Width / 2, grid.Height / 2, 0)); Application.DoEvents();
-            Require((bool)Get(form, "gridMode"), language + ": grid selection");
+            Require((bool)Get(form, "gridMode") && !(bool)Get(grid, "keyboardFocus"), language + ": mouse selection leaves no button focus box or persistent selection frame");
             Set(grid, "hot", true); Set(grid, "pressed", true); grid.Invalidate(); Application.DoEvents(); Capture(form, language + "-selected-button-pressed"); Set(grid, "pressed", false); Set(grid, "hot", false); grid.Invalidate();
             Call(form, "ToggleExpanded"); Application.DoEvents();
             Control expand = (Control)Get(form, "expandButton");
+            Require(!Application.OpenForms.Cast<Form>().Any(open => open != form), language + ": resize creates no auxiliary window");
             Require(search.Parent.Height == 40 && search.Parent.Width >= form.ClientSize.Width - 50 && (bool)Get(form, "expanded") && (bool)search.Parent.GetType().GetProperty("ContinuousPerimeterGradient", Members).GetValue(search.Parent, null), language + ": expanded search keeps geometry and continuous perimeter colors");
             Require(expand.GetType().GetProperty("IconKind", Members).GetValue(expand, null).ToString() == "Collapse", language + ": collapse button rendering state");
             Call(form, "ToggleExpanded"); Application.DoEvents();
@@ -397,6 +413,9 @@ internal static class PreviewHarness
         using (Form form = CreatePreview("settings", language))
         {
             form.Show(); Application.DoEvents();
+            ComboBox languageSelector = (ComboBox)Get(form, "langCombo");
+            Require(languageSelector.GetType() == typeof(ComboBox), language + ": language selector has no post-native custom painting subclass");
+            Require(StableComboItemRender(languageSelector, DrawItemState.None, 20) && StableComboItemRender(languageSelector, DrawItemState.Selected, 20), language + ": language selector rows repaint stably");
             Control slider = (Control)Get(form, "delaySlider");
             Call(slider, "OnKeyDown", new KeyEventArgs(Keys.Right));
             Require((int)slider.GetType().GetProperty("Value", Members).GetValue(slider, null) == 300, language + ": slider arrow step");
@@ -423,6 +442,11 @@ internal static class PreviewHarness
             Require(viewport.ClientRectangle.Contains(viewport.RectangleToClient(refresh.RectangleToScreen(refresh.ClientRectangle))), language + ": diagnostics remains reachable in short window");
             Capture(form, language + "-settings-short");
             form.Close(); Application.DoEvents();
+        }
+        using (Form form = CreatePreview("compact", language))
+        {
+            form.Show(); Application.DoEvents(); Call(form, "CloseCollection"); Application.DoEvents();
+            Require(!form.Visible && !Application.OpenForms.Cast<Form>().Any(open => open.GetType().Name == "WindowMorphOverlay"), language + ": close is immediate and creates no shrink overlay");
         }
     }
 

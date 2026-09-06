@@ -17,18 +17,18 @@ This file is the canonical entry point and rulebook for AI coding agents working
 ## 2. Repository Shape & Architecture Constraints
 
 The codebase has an unusual monolithic structure:
-- `DirectDesktopFolders.cs`: **Contains the entire application (~3,518 lines)**. All models, Win32 P/Invoke, COM interfaces, UI controls, drag monitor, and entry point live in this single file.
+- `src/DesktopFolders.cs`: **Contains the application implementation**. All models, Win32 P/Invoke, COM interfaces, UI controls, drag monitor, and entry point live in this single file.
 - `build.ps1`: Reproducible build script invoking the .NET Framework 4.x C# compiler (`csc.exe`).
-- `generate-icon.ps1`: Re-generates `DesktopFolders.ico` from canonical `DesktopFolders.png`.
-- `CollectionBackground.Cosmic.png`: Required embedded resource (dark blue–indigo–lavender cosmic background artwork). It is embedded under the stable manifest name `DesktopFolders.CollectionBackground.png`.
-- `DesktopFolders.ico` / `DesktopFolders.png`: Application branding assets.
+- `generate-icon.ps1`: Re-generates `assets/DesktopFolders.ico` from canonical `assets/DesktopFolders.png`.
+- `assets/CollectionBackground.png`: Required embedded resource (dark blue–indigo–lavender cosmic background artwork). It is embedded under the stable manifest name `DesktopFolders.CollectionBackground.png`.
+- `assets/DesktopFolders.ico` / `assets/DesktopFolders.png`: Application branding assets.
 - `docs/ai/`:
   - `ARCHITECTURE.md` — In-depth architectural decomposition.
   - `REPO_MAP.md` — Component map and dependency guide.
   - `CURRENT_STATE.md` — Current working baseline, verified capabilities, and technical risks.
 
 > [!CAUTION]
-> Because almost all implementation logic is concentrated in `DirectDesktopFolders.cs`, agents **MUST NOT** perform broad, opportunistic refactoring, bulk reformatting, or mass renaming while fixing bugs or implementing individual features.
+> Because almost all implementation logic is concentrated in `src/DesktopFolders.cs`, agents **MUST NOT** perform broad, opportunistic refactoring, bulk reformatting, or mass renaming while fixing bugs or implementing individual features.
 
 ---
 
@@ -108,7 +108,7 @@ Agents operating in Antigravity or Codex have direct access to the workspace.
 
 ### Step-by-Step Task Routine:
 1. **Read**: Review `AGENTS.md`, `docs/ai/ARCHITECTURE.md`, `docs/ai/REPO_MAP.md`, and `docs/ai/CURRENT_STATE.md`.
-2. **Isolate**: Inspect only the relevant subsystem inside `DirectDesktopFolders.cs`.
+2. **Isolate**: Inspect only the relevant subsystem inside `src/DesktopFolders.cs`.
 3. **Hypothesize**: Formulate a concrete hypothesis and minimal symbol scope before editing.
 4. **Patch**: Apply surgical, targeted edits. Keep formatting identical to existing code style.
 5. **Compile**: Run `.\build.ps1` to ensure syntax and type-check validity.
@@ -126,7 +126,7 @@ Agents operating in Antigravity or Codex have direct access to the workspace.
 ### Task Packet Protocol (for Subagents & External LLMs)
 Never dump the entire 3,500-line file or long chat histories into prompt contexts. Provide a concise **Task Packet**:
 - **Goal**: Exactly what bug to fix or feature to add.
-- **Subsystem & Line Range**: Specific class and lines in `DirectDesktopFolders.cs`.
+- **Subsystem & Line Range**: Specific class and lines in `src/DesktopFolders.cs`.
 - **Current vs Expected Behavior**: Observed failure and expected outcome.
 - **Invariants**: Any of the 12 rules specifically touched.
 - **Verification Command**: Exact build and test command to run.

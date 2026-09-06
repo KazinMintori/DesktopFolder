@@ -10,7 +10,7 @@ The existing product is a compact Windows desktop organizer: open a collection, 
 
 ## Shared visual system
 
-`VERIFIED`: CollectionTheme in DirectDesktopFolders.cs centralizes the palette used by collection surfaces, Settings controls, app-owned menus and drag preview.
+`VERIFIED`: `CollectionTheme` in `src/DesktopFolders.cs` centralizes the palette used by collection surfaces, Settings controls, app-owned menus and drag preview.
 
 | Role | Color |
 | --- | --- |
@@ -28,7 +28,7 @@ The existing product is a compact Windows desktop organizer: open a collection, 
 
 Normal text remains high contrast on the opaque card and input surfaces. The cosmic artwork stays behind a translucent midnight veil; opaque controls provide the stable reading surfaces used for interaction.
 
-Typography stays Segoe UI: collection titles retain the baseline 18pt size; Settings uses a 14pt title and 9–12pt labels/content. Content geometry follows the supplied baseline reference: a 40px full-width search field, 106px compact grid tiles, 42px compact icons, 28px section headers and a 6px scrollbar lane. The four 32×36px header actions now sit inside a 140×44px framed group with explicit padding. `CollectionBackground.Cosmic.png` uses the supplied portrait cosmic landscape. Cover rendering follows an aspect-aware focal point so the planet, nebula, mountains and reflective water remain represented in both compact and expanded crops.
+Typography stays Segoe UI: collection titles retain the baseline 18pt size; Settings uses a 14pt title and 9–12pt labels/content. Content geometry follows the supplied baseline reference: a 40px full-width search field, 106px compact grid tiles, 42px compact icons, 28px section headers and a 6px scrollbar lane. The four 32×36px header actions sit inside a softly tinted translucent 140×44px glass group whose continuous blue–purple perimeter matches the search bar. The tint suppresses busy background detail. Selected and keyboard-focused actions use a colored glyph and small underline without any square blue outline. Closing a collection is immediate, and compact/expanded resizing occurs directly on the collection without spawning a topmost composition host window. `assets/CollectionBackground.png` uses the supplied portrait cosmic landscape. Cover rendering follows an aspect-aware focal point so the planet, nebula, mountains and reflective water remain represented in both compact and expanded crops.
 
 ## Collection
 
@@ -46,12 +46,12 @@ Typography stays Segoe UI: collection titles retain the baseline 18pt size; Sett
 - `VERIFIED`: SettingsForm preserves all settings, language selection, Save/Close and diagnostics. Descriptions can wrap; title/version and action regions no longer overlap.
 - `VERIFIED`: Content uses the existing custom scrollbar, with a fixed header/footer and automatic scrolling to focused controls. Short windows retain access to diagnostics and actions.
 - `VERIFIED`: Toggles distinguish checked, hover, pressed, focus and disabled states; keyboard Space/Enter operates the focused toggle. Slider arrows/Home/End change its value and expose it through accessibility.
-- `VERIFIED`: Native language ComboBox behavior is retained with themed painting. Refresh shows a disabled working state, performs the existing scan off the UI thread and updates its result safely.
+- `VERIFIED`: Native language ComboBox behavior is retained with stable owner-drawn rows. The control no longer paints directly over the native handle after `WM_PAINT`, and selected rows use one background state without a second focus rectangle, preventing hover/focus flicker. Refresh shows a disabled working state, performs the existing scan off the UI thread and updates its result safely.
 
 ## Verification and limits
 
 The optional tools/ui-preview/PreviewHarness.cs loads a separately built app assembly with fixture paths and no controller. It never invokes production startup or edits real collection members. See its README for commands.
 
-`VERIFIED`: System-DPI-aware rendering was inspected at 120 DPI for English/Vietnamese compact, expanded, list, empty and no-match collections. Checks cover the framed action group and its search separation, exact action bounds, the two-color title, single-pass perimeter mode, restored search geometry, search focus/filter/clear, 20 repeated renders per action in idle/hover/pressed/disabled states, and state/glyph transitions painted successively onto the same bitmap. Native pointer verification moved the fixture popup through the search-to-items background gap and confirmed that it remained there after the normal anchor-refresh interval.
+`VERIFIED`: System-DPI-aware rendering was inspected at 120 DPI for English/Vietnamese compact, expanded, list, empty and no-match collections. Checks cover the transparent search-gradient action group, exact action bounds, pointer focus cleanup, keyboard focus visibility, the two-color title, single-pass perimeter mode, restored search geometry, search focus/filter/clear, 20 repeated renders per action in idle/hover/pressed/disabled states, and state/glyph transitions painted successively onto the same bitmap. Native pointer verification moved the fixture popup through the search-to-items background gap and confirmed that it remained there after the normal anchor-refresh interval.
 
 `UNKNOWN`: Complete manual desktop drag/merge/restore regression and monitor-to-monitor DPI changes were not exercised by the fixture harness. Opening/reorder motion retains the existing logic; this pass does not establish runtime performance guarantees under RDP or heavy GPU load.
