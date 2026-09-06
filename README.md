@@ -5,94 +5,130 @@
 <h1 align="center">DesktopFolders</h1>
 
 <p align="center">
-  Beautiful, virtual app collections for the Windows Desktop.<br>
-  Organize shortcuts and system icons without moving or deleting the files behind them.
+  Phone-style virtual collections for the Windows desktop.
 </p>
 
 <p align="center">
-  <a href="https://github.com/KazinMintori/DesktopFolder/releases/latest/download/DesktopFolders.exe"><strong>Download for Windows</strong></a>
-  ·
-  <a href="https://github.com/KazinMintori/DesktopFolder/releases/latest">Release notes</a>
+  Organize desktop shortcuts and selected Windows system icons without moving them into physical folders.
 </p>
 
 ---
 
-DesktopFolders brings phone-style grouping to the classic Windows Desktop. Drag one supported icon over another, hold briefly, and a polished cosmic-glass collection replaces the individual icons. Open it to search, reorder, pin, nest, or restore items whenever you want.
+DesktopFolders is a lightweight Windows desktop organizer that lets you group supported desktop items into virtual collections. Collections are stored as metadata, while the original files and shortcuts remain in their existing locations.
 
-## Why DesktopFolders?
+Drag one supported desktop icon over another, hold briefly, and DesktopFolders can create a collection in their place. Collections can then be opened to search, reorder, pin, nest, or restore their contents.
 
-- **A cleaner desktop, without real folders.** Collections are metadata, not directories.
-- **Your files stay where they are.** Original paths and attributes are preserved.
-- **Designed for Windows.** Desktop placement uses supported Shell APIs instead of writing into Explorer.
-- **More than shortcuts.** Recycle Bin, This PC, and Network can join filesystem items in mixed collections.
-- **Fast and focused.** One portable executable, no account, no network service, and no third-party runtime files.
+## Features
 
-## Product highlights
-
-| | Capability |
+| Feature | Description |
 |---|---|
-| **Cosmic collection UI** | Compact and expanded layouts, instant search, polished glass cards, grid/list modes, and restrained motion. |
-| **Flexible organization** | Pin favorites, drag to reorder, transfer between open collections, or create nested collections. |
-| **Safe restoration** | Drag members back to the Desktop or dissolve a collection; original attributes and Shell visibility are restored. |
-| **Collision-free placement** | Restored filesystem icons are placed into the nearest available Desktop grid slot through `IFolderView`. |
-| **Accessible controls** | Keyboard navigation, visible keyboard state, descriptive control names, F2 rename, Ctrl+F search, and Escape close. |
-| **Bilingual interface** | English and Vietnamese are embedded in the executable, with automatic system-language selection. |
+| **Virtual collections** | Group supported desktop items without creating physical folders or changing their original paths. |
+| **Compact and expanded views** | Open collections in a compact layout or expand them when more space is needed. |
+| **Search and organization** | Search items, reorder them with drag and drop, pin favorites, transfer items between collections, and create nested collections. |
+| **Desktop restoration** | Move members back to the desktop or dissolve a collection when it is no longer needed. |
+| **Grid-aware placement** | Restored filesystem items are placed in an available desktop position instead of intentionally overlapping existing icons. |
+| **System icon support** | Recycle Bin, This PC, and Network can be used alongside supported filesystem items. |
+| **Keyboard support** | Includes keyboard navigation, F2 rename, Ctrl+F search, Enter/Space activation, and Escape handling. |
+| **English and Vietnamese** | The interface includes embedded English and Vietnamese localization with automatic system-language selection. |
 
-## How grouping works
+## How it works
 
-1. Drag a supported Desktop icon over another supported icon.
-2. Hold for the configured delay—280 ms by default.
+1. Drag a supported desktop icon over another supported icon.
+2. Hold briefly over the target icon.
 3. Release when the collection preview appears.
 
-Quick drops before the threshold remain native Windows Explorer operations. DesktopFolders uses no global mouse hook and does not inject code into Explorer.
+By default, the grouping delay is 280 ms. Quick drops before that threshold are left to the normal Windows desktop drag-and-drop behavior.
 
-## Download and install
+DesktopFolders interacts with the Windows Shell and does not inject code into Explorer.
 
-1. Download [`DesktopFolders.exe`](https://github.com/KazinMintori/DesktopFolder/releases/latest/download/DesktopFolders.exe).
-2. Move it to a permanent user-writable location.
-3. Run it and review Settings.
-4. Optionally enable **Start with Windows**.
+## Getting the source code
 
-The release is portable: artwork, localization, and application resources are embedded. Developer tools are not required on the destination machine.
+DesktopFolders is currently distributed through its source repository rather than pre-built releases.
 
-### If Microsoft Defender blocks the download
+### Option 1: Download ZIP
 
-Microsoft Defender SmartScreen, the browser, or another reputation-based security check may block a direct `.exe` download when the application is newly published, has few downloads, or is not yet signed with a certificate that has established reputation. This warning does not by itself prove that the file is malicious, but it should still be treated seriously.
+1. Open this repository on GitHub.
+2. Select **Code → Download ZIP**.
+3. Extract the archive to a local folder.
+4. Open PowerShell in the extracted project directory.
+5. Build the application with:
 
-If the direct executable download is blocked:
+```powershell
+.\build.ps1
+```
 
-1. Open the repository's **Code** menu and choose **Download ZIP**, or use [this source ZIP](https://github.com/KazinMintori/DesktopFolder/archive/refs/heads/main.zip).
-2. Extract the downloaded archive.
-3. Open the extracted `DesktopFolder-main` directory and locate `DesktopFolders.exe` at its root.
-4. Right-click `DesktopFolders.exe`, choose **Show more options → Scan with Microsoft Defender**, and run it only if the scan reports no threat.
+The generated executable will be written to the project directory as `DesktopFolders.exe` unless another output name is specified.
 
-Do not disable Defender or restore a file that Defender quarantines after extraction. In that case, build the executable from the included source with `build.ps1`, or report the detection as a possible false positive and wait for it to be reviewed.
+### Option 2: Clone with Git
 
-### Requirements
+```powershell
+git clone https://github.com/KazinMintori/DesktopFolder.git
+cd DesktopFolder
+.\build.ps1
+```
+
+## Requirements
+
+To build and run DesktopFolders, you need:
 
 - Windows 10 or Windows 11.
-- The classic Explorer Desktop backed by `SysListView32`.
-- .NET Framework 4.x, included with supported Windows installations.
+- The standard Windows Explorer desktop environment.
+- .NET Framework 4.x.
+- PowerShell for the included build script.
 
-> **Download safety:** official releases should be Authenticode-signed and include a SHA-256 checksum. Verify the publisher and checksum before running a download. SmartScreen may still warn while a new certificate or release builds reputation.
+The project uses the C# compiler included with the .NET Framework installation and does not require Visual Studio for the default build process.
 
-## Data safety and privacy
+## Build options
 
-DesktopFolders never moves members into physical folders and never deletes user files.
+The standard build command is:
 
-- Filesystem members keep their absolute path and original `FileAttributes` in `%APPDATA%\DesktopFolders\virtual-layout.json`.
-- Recycle Bin, This PC, and Network use stable Windows Known Folder identities. Raw PIDL pointers are never persisted.
-- Runtime PIDLs and Shell COM objects are scoped and released after use.
-- The application contains no network client, telemetry, account system, API keys, or bundled third-party service.
+```powershell
+.\build.ps1
+```
 
-## Safe uninstall
+Additional development builds are available:
+
+```powershell
+.\build.ps1 -TraceDrag -Output DesktopFolders-trace.exe
+.\build.ps1 -TestBuild -Output DesktopFolders-test.exe
+```
+
+Test builds expose the project's internal validation commands:
+
+```powershell
+.\DesktopFolders-test.exe --test-layout-graph
+.\DesktopFolders-test.exe --test-shell-items
+.\DesktopFolders-test.exe --test-uninstall-restore
+```
+
+Release verification tooling can be run with:
+
+```powershell
+.\verify-release.ps1
+```
+
+## Data and privacy
+
+DesktopFolders is designed to operate locally.
+
+- Collection layout data is stored under `%APPDATA%\DesktopFolders\virtual-layout.json`.
+- Filesystem items keep their original filesystem locations.
+- Supported Windows system icons are represented using Windows Shell identities rather than copied into project-managed folders.
+- The application does not include telemetry, an account system, API keys, or a background network service.
+
+## Restoring the desktop
+
+DesktopFolders provides a **Prepare uninstall…** action from its tray menu.
+
+Before removing the application:
 
 1. Right-click the DesktopFolders tray icon.
-2. Choose **Prepare uninstall…** and confirm.
-3. Verify that collection members have returned to the Desktop.
-4. Delete `DesktopFolders.exe`.
+2. Choose **Prepare uninstall…**.
+3. Confirm the operation.
+4. Verify that collection members have returned to the desktop.
+5. Remove the application executable and project files if they are no longer needed.
 
-The preparation step restores members before clearing the layout, removes per-user startup and file-registration data, and aborts safely if a member is unavailable.
+The preparation step attempts to restore collection members before clearing the saved virtual layout.
 
 ## Keyboard shortcuts
 
@@ -103,27 +139,31 @@ The preparation step restores members before clearing the layout, removes per-us
 | `Enter` / `Space` | Activate the focused item or control |
 | `Escape` | Clear search, close a collection, or close Settings |
 
-## Build from source
+## Project structure
 
-Building requires Windows and the .NET Framework 4.x C# compiler. The resulting executable has no Windows SDK metadata dependency.
+The application is built primarily from the C# source under `src/`, together with embedded assets, localization resources, and the application manifest.
 
-```powershell
-.\build.ps1
-.\build.ps1 -TraceDrag -Output DesktopFolders-trace.exe
-.\build.ps1 -TestBuild -Output DesktopFolders-test.exe
-.\DesktopFolders-test.exe --test-layout-graph
-.\DesktopFolders-test.exe --test-shell-items
-.\DesktopFolders-test.exe --test-uninstall-restore
-.\verify-release.ps1
-```
+Useful project files include:
 
-Maintainers: see [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md) for local signing and the protected GitHub Actions release workflow.
+- `build.ps1` — main build script.
+- `verify-release.ps1` — release validation checks.
+- `src/DesktopFolders.cs` — application source.
+- `Resources/` — embedded localization resources.
+- `assets/` — application artwork and icons.
+- `config/app.manifest` — Windows application manifest.
+- `docs/` — architecture, maintenance, and development documentation.
 
-See [`AGENTS.md`](AGENTS.md) and [`docs/ai/ARCHITECTURE.md`](docs/ai/ARCHITECTURE.md) for maintainer invariants and architecture notes.
+Maintainer documentation is available in [`AGENTS.md`](AGENTS.md), [`docs/ai/ARCHITECTURE.md`](docs/ai/ARCHITECTURE.md), and [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md).
 
 ## Current limitations
 
-- Other pathless Shell namespace objects, such as Control Panel, are not supported.
+- Some Windows Shell namespace items, such as Control Panel entries, are not currently supported.
 - Changing attributes for Public Desktop items may require elevated permissions.
-- Third-party Explorer replacements that do not expose the classic Desktop list view are unsupported.
-- The release has no automatic updater; install updates by replacing the executable. Existing collection shortcuts self-heal to the new executable location on startup.
+- Third-party Explorer replacements that do not expose the expected Windows desktop interfaces are not supported.
+- DesktopFolders does not currently include an automatic updater.
+
+## Project status
+
+DesktopFolders is under active development. Behavior may change as desktop compatibility, collection handling, and user-interface details are refined.
+
+Bug reports and reproducible compatibility issues are welcome through GitHub Issues.
