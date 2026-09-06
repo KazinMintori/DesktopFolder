@@ -55,6 +55,19 @@ Quick drops before the threshold remain native Windows Explorer operations. Desk
 
 The release is portable: artwork, localization, and application resources are embedded. Developer tools are not required on the destination machine.
 
+### If Microsoft Defender blocks the download
+
+Microsoft Defender SmartScreen, the browser, or another reputation-based security check may block a direct `.exe` download when the application is newly published, has few downloads, or is not yet signed with a certificate that has established reputation. This warning does not by itself prove that the file is malicious, but it should still be treated seriously.
+
+If the direct executable download is blocked:
+
+1. Open the repository's **Code** menu and choose **Download ZIP**, or use [this source ZIP](https://github.com/KazinMintori/DesktopFolder/archive/refs/heads/main.zip).
+2. Extract the downloaded archive.
+3. Open the extracted `DesktopFolder-main` directory and locate `DesktopFolders.exe` at its root.
+4. Right-click `DesktopFolders.exe`, choose **Show more options → Scan with Microsoft Defender**, and run it only if the scan reports no threat.
+
+Do not disable Defender or restore a file that Defender quarantines after extraction. In that case, build the executable from the included source with `build.ps1`, or report the detection as a possible false positive and wait for it to be reviewed.
+
 ### Requirements
 
 - Windows 10 or Windows 11.
