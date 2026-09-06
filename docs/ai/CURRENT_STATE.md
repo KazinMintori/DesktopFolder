@@ -17,7 +17,7 @@ Last audited: 2026-09-06
 
 - **VERIFIED**: Building requires the .NET Framework developer compiler; running the compiled executable does not require developer tools.
 - **VERIFIED**: There is no installer or automatic updater. Startup is per-user through the Windows Run key; safe uninstall preparation is built into the tray menu.
-- **VERIFIED**: The executable is not digitally signed.
+- **VERIFIED**: The repository provides local and GitHub Actions Authenticode signing paths; an actual release is signed only when a trusted certificate is supplied through the protected release environment.
 - **INFERRED**: SmartScreen or antivirus reputation warnings are likely for a newly downloaded unsigned build, especially while download prevalence is low.
 - **UNKNOWN**: Full compatibility has not been physically tested on every supported Windows 10/11 build, DPI combination, multi-monitor topology, remote session, or clean-machine policy configuration.
 

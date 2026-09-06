@@ -61,7 +61,7 @@ The release is portable: artwork, localization, and application resources are em
 - The classic Explorer Desktop backed by `SysListView32`.
 - .NET Framework 4.x, included with supported Windows installations.
 
-> **Unsigned build:** the current executable is not Authenticode-signed. SmartScreen or antivirus reputation checks may warn about a newly downloaded release. Compare its SHA-256 value with the checksum published in the GitHub Release.
+> **Download safety:** official releases should be Authenticode-signed and include a SHA-256 checksum. Verify the publisher and checksum before running a download. SmartScreen may still warn while a new certificate or release builds reputation.
 
 ## Data safety and privacy
 
@@ -103,6 +103,8 @@ Building requires Windows and the .NET Framework 4.x C# compiler. The resulting 
 .\DesktopFolders-test.exe --test-uninstall-restore
 .\verify-release.ps1
 ```
+
+Maintainers: see [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md) for local signing and the protected GitHub Actions release workflow.
 
 See [`AGENTS.md`](AGENTS.md) and [`docs/ai/ARCHITECTURE.md`](docs/ai/ARCHITECTURE.md) for maintainer invariants and architecture notes.
 

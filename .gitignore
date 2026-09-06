@@ -6,3 +6,5 @@ obj/
 DesktopFolders-*.exe
 drag-diagnostic.log
 /outputs/
+*.pfx
+*.p12

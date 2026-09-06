@@ -16,6 +16,8 @@
 
 - `build.ps1` — validates required inputs, locates .NET Framework references, and produces the executable without Windows SDK metadata dependencies.
 - `verify-release.ps1` — checks embedded resources, runtime-reference allowlist, version metadata, Authenticode status, and SHA-256 without launching the product.
+- `sign-release.ps1` — signs a release with a Code Signing certificate from the current-user certificate store, adds an RFC 3161 timestamp, and verifies the signature.
+- `.github/workflows/release.yml` — protected tag/manual release pipeline that imports an ephemeral PFX secret, builds, signs, verifies, and publishes release artifacts.
 - `config/app.manifest` — declares as-invoker execution, supported Windows generation, and system-DPI awareness.
 - `generate-icon.ps1` — regenerates the PNG-backed ICO.
 - `tools/ui-preview/PreviewHarness.cs` — reflection-based UI regression harness for compact/expanded layouts, repaint stability, search perimeter continuity, background drag, localization, and DPI behavior.

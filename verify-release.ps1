@@ -1,6 +1,7 @@
 param(
     [string]$Path = (Join-Path $PSScriptRoot "DesktopFolders.exe"),
-    [switch]$RequireSignature
+    [switch]$RequireSignature,
+    [switch]$RequireTimestamp
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +30,8 @@ if ($version.FileVersion -match '^6(?:\.|$)' -or $version.ProductVersion -match 
 
 $signature = Get-AuthenticodeSignature -LiteralPath $resolved
 if ($RequireSignature -and $signature.Status -ne [Management.Automation.SignatureStatus]::Valid) { throw "Authenticode signature is not valid: $($signature.Status)" }
+if ($RequireTimestamp -and $signature.Status -ne [Management.Automation.SignatureStatus]::Valid) { throw "A valid Authenticode signature is required before checking its timestamp" }
+if ($RequireTimestamp -and -not $signature.TimeStamperCertificate) { throw "Authenticode signature does not contain a timestamp" }
 
 $hash = Get-FileHash -LiteralPath $resolved -Algorithm SHA256
 [pscustomobject]@{
@@ -37,5 +40,7 @@ $hash = Get-FileHash -LiteralPath $resolved -Algorithm SHA256
     EmbeddedResources = $resources.Count
     RuntimeReferences = $references -join ", "
     Signature = $signature.Status
+    Signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
+    TimestampAuthority = if ($signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Subject } else { $null }
     SHA256 = $hash.Hash
 }
