@@ -19,7 +19,7 @@ This document is orientation only. `src/DesktopFolders.cs` and the build scripts
 
 ## Windows Shell integration
 
-- **VERIFIED**: `ExplorerDesktop` discovers the classic Desktop `SysListView32`, scans items through UI Automation, and uses `IFolderView::SelectAndPositionItems` for collision-free placement.
+- **VERIFIED**: `ExplorerDesktop` discovers the classic Desktop `SysListView32`, scans items through UI Automation, and uses `IFolderView::SelectAndPositionItems` for collision-free placement. When `IFolderView::GetAutoArrange` reports auto-arrange, placement is skipped (Explorer re-sorts anyway) instead of retrying for about two seconds.
 - **VERIFIED**: Recycle Bin, This PC, and Network use stable `KNOWNFOLDERID` strings as persistent identities. Raw PIDL pointers are never serialized.
 - **VERIFIED**: `ShellDesktopItems` resolves a runtime PIDL for each operation, releases it with `ILFree`, releases extracted icon handles with `DestroyIcon`, and releases COM objects in `finally` blocks.
 - **VERIFIED**: Virtual Shell members use Shell operations for visibility, icon extraction, and opening; filesystem APIs are used only for file-backed members.
@@ -37,5 +37,5 @@ This document is orientation only. `src/DesktopFolders.cs` and the build scripts
 ## Known boundaries
 
 - **VERIFIED**: Pathless namespace objects other than the three explicitly supported system icons are ignored.
-- **VERIFIED**: Changing Hidden attributes on Public Desktop files can fail without sufficient permissions; errors are caught and the collection operation does not complete.
+- **VERIFIED**: Changing Hidden attributes on Public Desktop files can fail without sufficient permissions; errors are caught, the operation is rolled back, and `ThemedDialog.DescribeFailure` explains the elevation requirement instead of showing the raw exception text.
 - **UNKNOWN**: Third-party Explorer replacements and future Windows Shell changes may not expose the expected Desktop list view or COM behavior.

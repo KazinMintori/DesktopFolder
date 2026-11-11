@@ -372,7 +372,7 @@ internal static class PreviewHarness
             Rectangle manuallyMoved = form.Bounds; Call(form, "QueueAnchorUpdate", new Rectangle(beforeMove.Left + 4, beforeMove.Top + 4, 64, 64)); Application.DoEvents(); Require(form.Bounds == manuallyMoved, language + ": live anchor refresh does not cancel temporary position");
             Control firstTile = System.Linq.Enumerable.First(Descendants(form), item => item.GetType().Name == "AppTile");
             Panel viewportGeometry = (Panel)Get(form, "appsViewport"); Control sectionGeometry = System.Linq.Enumerable.First(Descendants(form), item => item.GetType().Name == "SectionHeaderControl");
-            Require(firstTile.Height == 106 && viewportGeometry.Top == 54 && sectionGeometry.Height == 28, language + ": tile and content spacing keep baseline geometry");
+            Require(firstTile.Height == (int)AppType("AppTile").GetProperty("CompactGridHeight", Members).GetValue(null, null) && firstTile.Height >= 106 && viewportGeometry.Top == 54 && sectionGeometry.Height == 28, language + ": tile and content spacing keep baseline geometry");
             Call(firstTile, "OnMouseEnter", EventArgs.Empty); Application.DoEvents(); Capture(form, language + "-tile-hover"); Call(firstTile, "OnMouseLeave", EventArgs.Empty);
             Control closeButton = System.Linq.Enumerable.First(Descendants(form), item => item.GetType().Name == "HeaderIconButton" && item.AccessibleName == (string)AppType("Loc").GetMethod("Get", Members, null, new Type[] { typeof(string), typeof(object[]) }, null).Invoke(null, new object[] { "panel.close_accessible", new object[0] }));
             Set(closeButton, "hot", true); closeButton.Invalidate(); Application.DoEvents(); Capture(form, language + "-button-hover");
@@ -413,6 +413,8 @@ internal static class PreviewHarness
         using (Form form = CreatePreview("settings", language))
         {
             form.Show(); Application.DoEvents();
+            Label clippedLabel = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<Label>(Descendants(form)), item => item.Visible && !item.AutoSize && !item.AutoEllipsis && !String.IsNullOrEmpty(item.Text) && TextRenderer.MeasureText(item.Text, item.Font, new Size(Math.Max(1, item.ClientSize.Width), Int32.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height > item.ClientSize.Height + 1);
+            Require(clippedLabel == null, language + ": settings text fits its labels at current DPI" + (clippedLabel == null ? "" : " (clipped: " + clippedLabel.Text + ")"));
             ComboBox languageSelector = (ComboBox)Get(form, "langCombo");
             Require(languageSelector.GetType() == typeof(ComboBox), language + ": language selector has no post-native custom painting subclass");
             Require(StableComboItemRender(languageSelector, DrawItemState.None, 20) && StableComboItemRender(languageSelector, DrawItemState.Selected, 20), language + ": language selector rows repaint stably");
@@ -442,6 +444,17 @@ internal static class PreviewHarness
             Require(viewport.ClientRectangle.Contains(viewport.RectangleToClient(refresh.RectangleToScreen(refresh.ClientRectangle))), language + ": diagnostics remains reachable in short window");
             Capture(form, language + "-settings-short");
             form.Close(); Application.DoEvents();
+        }
+        AppType("Loc").GetMethod("SetLanguage", Members).Invoke(null, new object[] { language });
+        string dialogText = (string)AppType("Loc").GetMethod("Get", Members, null, new Type[] { typeof(string), typeof(object[]) }, null).Invoke(null, new object[] { "error.public_desktop_access", new object[] { "Visual Studio Code" } });
+        using (Form dialog = (Form)New("ThemedDialog", dialogText, "Desktop Folders", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2))
+        {
+            dialog.Show(); Application.DoEvents();
+            Label clippedDialogText = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<Label>(Descendants(dialog)), item => item.Text == dialogText && TextRenderer.MeasureText(item.Text, item.Font, new Size(item.ClientSize.Width, Int32.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix).Height > item.ClientSize.Height + 1);
+            Require(clippedDialogText == null, language + ": themed dialog shows the whole message");
+            Require(dialog.CancelButton != null && ((Button)dialog.CancelButton).DialogResult == DialogResult.No && ((Button)dialog.AcceptButton).DialogResult == DialogResult.No, language + ": themed dialog honors default and cancel buttons");
+            Capture(dialog, language + "-dialog-warning");
+            dialog.Close(); Application.DoEvents();
         }
         using (Form form = CreatePreview("compact", language))
         {

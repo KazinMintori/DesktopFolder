@@ -78,5 +78,13 @@
   "diagnostics.no_syslistview": "Không tìm thấy SysListView32 của Desktop Explorer",
   "diagnostics.scan_summary": "Explorer: {0} icon | Nhận diện: {1} | Chưa hỗ trợ: {2}",
   "diagnostics.scan_error": "Lỗi quét Desktop: {0}",
-  "diagnostics.unsupported_examples": "\r\nVí dụ chưa hỗ trợ: {0}"
+  "diagnostics.unsupported_examples": "\r\nVí dụ chưa hỗ trợ: {0}",
+  "dialog.ok": "OK",
+  "dialog.yes": "Có",
+  "dialog.no": "Không",
+  "dialog.cancel": "Hủy",
+  "error.public_desktop_access": "\"{0}\" nằm trên Desktop dùng chung (Public Desktop), nơi Windows chỉ cho quản trị viên thay đổi.\r\n\r\nHãy chạy Desktop Folders bằng quyền quản trị viên để gộp mục này, hoặc sao chép shortcut sang Desktop của bạn rồi gộp bản sao.",
+  "error.access_denied": "Windows đã chặn quyền truy cập \"{0}\".\r\n\r\nHãy kiểm tra tệp không ở chế độ chỉ đọc, không bị ứng dụng khác khóa hoặc bị chính sách bảo mật chặn, rồi thử lại.",
+  "error.open_item": "Không thể mở \"{0}\".\r\n\r\n{1}",
+  "error.restore_item": "Không thể trả mục này về Desktop: {0}"
 }

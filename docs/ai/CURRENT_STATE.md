@@ -1,6 +1,6 @@
 # Current state
 
-Last audited: 2026-09-06
+Last audited: 2026-11-11
 
 ## Verified baseline
 
@@ -12,6 +12,11 @@ Last audited: 2026-09-06
 - **VERIFIED**: The tray **Prepare uninstall** action now performs that restoration transaction, removes per-user registration/data, and exits without trying to self-delete the running executable.
 - **VERIFIED**: Existing collection shortcuts self-heal when the executable is relocated; link targets are inspected at startup rather than inferred from icon timestamps.
 - **VERIFIED**: The portable executable has no external asset, localization, or third-party DLL requirement.
+
+- **VERIFIED**: Settings scales its 96-DPI layout by system DPI; descriptions no longer clip at 125%. Collection tiles show two-line names, expanded mode uses four columns, and icons load at 96px from the Shell.
+- **VERIFIED**: All dialogs use the dark `ThemedDialog`; Public Desktop permission failures show an actionable explanation.
+- **VERIFIED**: Restore placement defers to Explorer when "Auto arrange icons" is enabled.
+- **INFERRED**: The collection popup geometry is still authored in pixels tuned at 120 DPI; at 150%+ system scaling, its text may feel crowded. Not reproducible on the 125% development display.
 
 ## Release boundaries
 

@@ -654,6 +654,13 @@ namespace DesktopFoldersDirect
             finally { if (iconHandle != IntPtr.Zero) Native.DestroyIcon(iconHandle); FreePidl(itemIdList); }
         }
 
+        internal static Bitmap GetLargeIcon(string identity, int size)
+        {
+            IntPtr itemIdList = ResolvePidl(identity);
+            try { return itemIdList == IntPtr.Zero ? null : ShellImageLoader.FromPidl(itemIdList, size); }
+            finally { FreePidl(itemIdList); }
+        }
+
         internal static void Open(string identity, IntPtr owner)
         {
             IntPtr itemIdList = ResolvePidl(identity);
@@ -812,6 +819,9 @@ namespace DesktopFoldersDirect
                 browserObject = Marshal.GetObjectForIUnknown(browserPointer); Marshal.Release(browserPointer); browserPointer = IntPtr.Zero; IShellBrowserNative browser = (IShellBrowserNative)browserObject;
                 int viewResult = browser.QueryActiveShellView(out viewPointer); if (viewResult < 0 || viewPointer == IntPtr.Zero) { DataStore.LogDrag("SHELL_PLACE QueryActiveShellView=" + viewResult); return false; }
                 viewObject = Marshal.GetObjectForIUnknown(viewPointer); Marshal.Release(viewPointer); viewPointer = IntPtr.Zero; IFolderViewNative view = (IFolderViewNative)viewObject;
+                // With "Auto arrange icons" on, Explorer re-sorts every item and ignores explicit
+                // positions; requesting a slot only causes ~2 s of futile retries. S_OK == enabled.
+                if (view.GetAutoArrange() == 0) { DataStore.LogDrag("SHELL_PLACE auto-arrange active; Explorer owns placement"); return true; }
                 Guid folderId = typeof(IShellFolderNative).GUID; int folderResult = view.GetFolder(ref folderId, out folderObject); if (folderResult < 0 || folderObject == null) { DataStore.LogDrag("SHELL_PLACE GetFolder=" + folderResult); return false; } IShellFolderNative folder = (IShellFolderNative)folderObject;
                 string parsingName = Path.GetFileName(path); uint eaten = 0, attributes = 0; int parseResult = folder.ParseDisplayName(IntPtr.Zero, IntPtr.Zero, parsingName, ref eaten, out targetItem, ref attributes); if (parseResult < 0 || targetItem == IntPtr.Zero) { DataStore.LogDrag("SHELL_PLACE Parse=" + parseResult + " path=" + path); return false; }
                 Native.POINT currentPosition; int positionResult = view.GetItemPosition(targetItem, out currentPosition); if (positionResult < 0) { DataStore.LogDrag("SHELL_PLACE GetItemPosition=" + positionResult); return false; }
@@ -1071,6 +1081,66 @@ namespace DesktopFoldersDirect
         }
     }
 
+    internal static class ShellImageLoader
+    {
+        internal const int PreferredSize = 96;
+        [StructLayout(LayoutKind.Sequential)] struct NativeSize { public int cx; public int cy; }
+        [ComImport, Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IShellItemImageFactoryNative { [PreserveSig] int GetImage(NativeSize size, int flags, out IntPtr bitmap); }
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHCreateItemFromParsingName(string path, IntPtr bindContext, ref Guid interfaceId, [MarshalAs(UnmanagedType.Interface)] out object item);
+        [DllImport("shell32.dll")] static extern int SHCreateItemFromIDList(IntPtr itemIdList, ref Guid interfaceId, [MarshalAs(UnmanagedType.Interface)] out object item);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr handle);
+        const int IconOnly = 0x4;
+
+        internal static Bitmap FromPath(string path, int size)
+        {
+            object item = null;
+            try { Guid id = typeof(IShellItemImageFactoryNative).GUID; if (SHCreateItemFromParsingName(path, IntPtr.Zero, ref id, out item) < 0) return null; return Render(item, size); }
+            catch (Exception error) { DataStore.LogDrag("ICON shell image path failed: " + error.Message); return null; }
+            finally { if (item != null && Marshal.IsComObject(item)) Marshal.ReleaseComObject(item); }
+        }
+
+        internal static Bitmap FromPidl(IntPtr itemIdList, int size)
+        {
+            object item = null;
+            try { Guid id = typeof(IShellItemImageFactoryNative).GUID; if (SHCreateItemFromIDList(itemIdList, ref id, out item) < 0) return null; return Render(item, size); }
+            catch (Exception error) { DataStore.LogDrag("ICON shell image pidl failed: " + error.Message); return null; }
+            finally { if (item != null && Marshal.IsComObject(item)) Marshal.ReleaseComObject(item); }
+        }
+
+        static Bitmap Render(object item, int size)
+        {
+            IShellItemImageFactoryNative factory = item as IShellItemImageFactoryNative; if (factory == null) return null;
+            IntPtr handle;
+            if (factory.GetImage(new NativeSize { cx = size, cy = size }, IconOnly, out handle) < 0 || handle == IntPtr.Zero) return null;
+            try { return ToArgb(handle); }
+            finally { DeleteObject(handle); }
+        }
+
+        // Image.FromHbitmap drops the alpha channel of 32-bit DIBs; copy the BGRA rows into an
+        // ARGB bitmap. Rows are copied one at a time because the source stride can be negative.
+        static Bitmap ToArgb(IntPtr handle)
+        {
+            using (Bitmap opaque = Image.FromHbitmap(handle))
+            {
+                if (Image.GetPixelFormatSize(opaque.PixelFormat) != 32) return new Bitmap(opaque);
+                int width = opaque.Width, height = opaque.Height, rowBytes = width * 4;
+                byte[] pixels = new byte[rowBytes * height];
+                Rectangle bounds = new Rectangle(0, 0, width, height);
+                System.Drawing.Imaging.BitmapData source = opaque.LockBits(bounds, System.Drawing.Imaging.ImageLockMode.ReadOnly, opaque.PixelFormat);
+                try { for (int row = 0; row < height; row++) Marshal.Copy(new IntPtr(source.Scan0.ToInt64() + (long)row * source.Stride), pixels, row * rowBytes, rowBytes); }
+                finally { opaque.UnlockBits(source); }
+                bool hasAlpha = false; for (int index = 3; index < pixels.Length; index += 4) if (pixels[index] != 0) { hasAlpha = true; break; }
+                if (!hasAlpha) return new Bitmap(opaque);
+                Bitmap result = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                System.Drawing.Imaging.BitmapData target = result.LockBits(bounds, System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                try { for (int row = 0; row < height; row++) Marshal.Copy(pixels, row * rowBytes, new IntPtr(target.Scan0.ToInt64() + (long)row * target.Stride), rowBytes); }
+                finally { result.UnlockBits(target); }
+                return result;
+            }
+        }
+    }
+
     internal static class IconLoader
     {
         static readonly object CacheLock = new object();
@@ -1082,7 +1152,10 @@ namespace DesktopFoldersDirect
                 Bitmap cached;
                 if (Cache.TryGetValue(path ?? "", out cached)) return new Bitmap(cached);
                 Bitmap loaded = null;
-                try { using (Icon icon = Icon.ExtractAssociatedIcon(path)) if (icon != null) loaded = icon.ToBitmap(); }
+                // Prefer the shell's 96 px icon: ExtractAssociatedIcon only yields 32 px, which
+                // looked soft once upscaled to the 42-56 px tile glyphs and composite tiles.
+                if (!String.IsNullOrEmpty(path)) loaded = ShellImageLoader.FromPath(path, ShellImageLoader.PreferredSize);
+                if (loaded == null) try { using (Icon icon = Icon.ExtractAssociatedIcon(path)) if (icon != null) loaded = icon.ToBitmap(); }
                 catch { }
                 if (loaded == null) loaded = SystemIcons.Application.ToBitmap();
                 if (Cache.Count >= 256) { foreach (Bitmap image in Cache.Values) image.Dispose(); Cache.Clear(); }
@@ -1097,7 +1170,8 @@ namespace DesktopFoldersDirect
             {
                 Bitmap cached;
                 if (Cache.TryGetValue(identity, out cached)) return new Bitmap(cached);
-                Bitmap loaded = ShellDesktopItems.GetIcon(identity) as Bitmap;
+                Bitmap loaded = ShellDesktopItems.GetLargeIcon(identity, ShellImageLoader.PreferredSize);
+                if (loaded == null) loaded = ShellDesktopItems.GetIcon(identity) as Bitmap;
                 if (loaded == null) loaded = SystemIcons.Application.ToBitmap();
                 if (Cache.Count >= 256) { foreach (Bitmap image in Cache.Values) image.Dispose(); Cache.Clear(); }
                 Cache[identity] = loaded; return new Bitmap(loaded);
@@ -1512,12 +1586,19 @@ namespace DesktopFoldersDirect
         bool pressed;
         ContextMenuStrip immediateContextMenu;
         internal string ItemPath { get; private set; }
+        // Grid tiles reserve two label lines so long app names stay readable instead of
+        // collapsing to a few characters plus an ellipsis.
+        static readonly Font CompactLabelFont = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+        static readonly Font LargeLabelFont = new Font("Segoe UI", 10f, FontStyle.Regular);
+        // Plate bottom + label gap + two DPI-dependent text lines + breathing room.
+        internal static int CompactGridHeight { get { return 83 + CompactLabelFont.Height * 2 + 2; } }
+        internal static int LargeGridHeight { get { return 111 + LargeLabelFont.Height * 2 + 2; } }
 
         internal AppTile(string path, string displayName, bool isPinned, bool grid, int width, bool reducedMotion)
         {
             ItemPath = path; label = displayName; pinned = isPinned; gridMode = grid; icon = IconLoader.ForIdentity(path);
             reduceMotion = reducedMotion;
-            Size = grid ? new Size(width, width < 170 ? 106 : 134) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
+            Size = grid ? new Size(width, width < 170 ? CompactGridHeight : LargeGridHeight) : new Size(width, 64); BackColor = Color.Transparent; Cursor = Cursors.Hand;
             TabStop = true; AccessibleRole = AccessibleRole.ListItem; AccessibleName = label; AccessibleDescription = pinned ? Loc.Get("tile.pinned_accessible") : "";
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         }
@@ -1570,7 +1651,7 @@ namespace DesktopFoldersDirect
         }
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic; e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
             float interaction = Enabled ? Math.Max(0f, Math.Min(1f, hoverProgress)) : 0f;
             int gridCardHeight = Width < 170 ? 77 : 105;
             Rectangle card = gridMode ? new Rectangle(2, 2, Math.Max(8, Width - 5), Math.Min(gridCardHeight, Math.Max(8, Height - 5))) : new Rectangle(2, 2, Math.Max(8, Width - 5), Math.Max(8, Height - 5));
@@ -1603,7 +1684,7 @@ namespace DesktopFoldersDirect
             if (Focused) using (Pen focus = new Pen(CollectionTheme.Focus, 2f)) e.Graphics.DrawRoundedRectangle(focus, Rectangle.Inflate(card, -2, -2), CollectionTheme.RadiusCard - 2);
             if (pinned)
             {
-                Rectangle badge = new Rectangle(card.Right - 21, card.Top + 6, 15, 15);
+                Rectangle badge = gridMode ? new Rectangle(card.Right - 21, card.Top + 6, 15, 15) : new Rectangle(card.Right - 30, card.Top + (card.Height - 15) / 2, 15, 15);
                 using (Brush badgeFill = new SolidBrush(Color.FromArgb(185, 8, 9, 12))) e.Graphics.FillEllipse(badgeFill, badge);
                 using (Pen badgeEdge = new Pen(Color.FromArgb(75, 255, 255, 255))) e.Graphics.DrawEllipse(badgeEdge, badge);
                 using (Brush star = new SolidBrush(CollectionTheme.Pin))
@@ -1613,25 +1694,22 @@ namespace DesktopFoldersDirect
             {
                 int iconSize = 42, iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 9.5f, FontStyle.Regular))
-                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.SecondaryText : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 4, card.Bottom + 2, card.Width - 8, Math.Max(18, Height - card.Bottom - 2)), format);
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.LineLimit })
+                using (Brush text = new SolidBrush(Enabled ? (hot || Focused ? CollectionTheme.Text : CollectionTheme.SecondaryText) : CollectionTheme.MutedText)) e.Graphics.DrawString(label, CompactLabelFont, text, new Rectangle(card.Left + 2, card.Bottom + 4, card.Width - 4, Math.Max(18, Height - card.Bottom - 4)), format);
             }
             else if (gridMode)
             {
                 int iconSize = 56, iconX = (Width - iconSize) / 2, iconY = card.Y + (card.Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(iconX, iconY, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
-                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.SecondaryText : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(card.Left + 6, card.Bottom + 2, card.Width - 12, Math.Max(20, Height - card.Bottom - 2)), format);
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.LineLimit })
+                using (Brush text = new SolidBrush(Enabled ? (hot || Focused ? CollectionTheme.Text : CollectionTheme.SecondaryText) : CollectionTheme.MutedText)) e.Graphics.DrawString(label, LargeLabelFont, text, new Rectangle(card.Left + 6, card.Bottom + 4, card.Width - 12, Math.Max(20, Height - card.Bottom - 4)), format);
             }
             else
             {
                 int iconSize = 42, iconY = (Height - iconSize) / 2;
                 if (icon != null) e.Graphics.DrawImage(icon, new Rectangle(12, iconY, iconSize, iconSize));
-                using (Font name = new Font("Segoe UI", 10f, FontStyle.Regular))
                 using (StringFormat format = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.Text : CollectionTheme.MutedText)) e.Graphics.DrawString(label, name, text, new Rectangle(68, 6, Math.Max(40, Width - 84), 50), format);
+                using (Brush text = new SolidBrush(Enabled ? CollectionTheme.Text : CollectionTheme.MutedText)) e.Graphics.DrawString(label, LargeLabelFont, text, new Rectangle(68, 6, Math.Max(40, Width - 68 - (pinned ? 40 : 16)), 50), format);
             }
         }
         static System.Drawing.Drawing2D.GraphicsPath StarPath(PointF center, float outer, float inner)
@@ -1671,6 +1749,23 @@ namespace DesktopFoldersDirect
             e.Graphics.DrawImage(snapshot, new Rectangle(Point.Empty, snapshot.Size), 0, 0, snapshot.Width, snapshot.Height, GraphicsUnit.Pixel);
         }
         protected override void Dispose(bool disposing) { if (disposing) { followTimer.Dispose(); snapshot.Dispose(); } base.Dispose(disposing); }
+    }
+
+    internal static class UiScale
+    {
+        static float factor;
+        // System DPI relative to the 96-DPI units the static layouts are authored in.
+        internal static float Factor
+        {
+            get
+            {
+                if (factor > 0f) return factor;
+                float measured = 1f;
+                try { using (Graphics screen = Graphics.FromHwnd(IntPtr.Zero)) measured = screen.DpiX / 96f; } catch { }
+                factor = Math.Max(1f, Math.Min(4f, measured)); return factor;
+            }
+        }
+        internal static int S(int value) { return (int)Math.Round(value * Factor); }
     }
 
     internal static class CollectionTheme
@@ -1782,6 +1877,19 @@ namespace DesktopFoldersDirect
 
     internal sealed class GradientLabel : Label
     {
+        // Long collection names shrink toward 13pt before the ellipsis is used.
+        Font FitFont(Graphics graphics, StringFormat format, int available)
+        {
+            if (String.IsNullOrEmpty(Text) || available <= 0 || graphics.MeasureString(Text, base.Font, Int32.MaxValue, format).Width <= available) return null;
+            Font candidate = null;
+            for (float size = base.Font.Size - .5f; size >= 13f; size -= .5f)
+            {
+                if (candidate != null) candidate.Dispose();
+                candidate = new Font(base.Font.FontFamily, size, base.Font.Style);
+                if (graphics.MeasureString(Text, candidate, Int32.MaxValue, format).Width <= available) break;
+            }
+            return candidate;
+        }
         internal GradientLabel()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
@@ -1792,7 +1900,9 @@ namespace DesktopFoldersDirect
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias; e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             Rectangle textArea = new Rectangle(0, 0, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
             using (StringFormat format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            using (Font fitted = FitFont(e.Graphics, format, textArea.Width))
             {
+                Font Font = fitted ?? base.Font;
                 int gradientWidth = Math.Min(textArea.Width, Math.Max(2, (int)Math.Ceiling(e.Graphics.MeasureString(Text ?? "", Font, Int32.MaxValue, format).Width)));
                 Rectangle gradientArea = new Rectangle(0, 0, gradientWidth, textArea.Height);
                 using (System.Drawing.Drawing2D.LinearGradientBrush glow = new System.Drawing.Drawing2D.LinearGradientBrush(gradientArea, CollectionTheme.TitlePurple, CollectionTheme.TitleBlue, 0f))
@@ -2358,8 +2468,10 @@ namespace DesktopFoldersDirect
             VirtualMember[] members = group.Members.Where(m => m.IsAvailable && m.DisplayName.ToLowerInvariant().Contains(query)).OrderByDescending(m => group.Pinned.Contains(m.Identity, StringComparer.OrdinalIgnoreCase)).ToArray();
             bool compactGrid = gridMode && apps.ClientSize.Width < 600;
             int usableWidth = Math.Max(260, apps.ClientSize.Width);
-            int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 24) / 3)) : Math.Max(250, usableWidth - 4);
-            int rowWidth = gridMode ? (width + 8) * 3 : width;
+            // Expanded grids use four medium columns instead of three oversized plates.
+            int columns = gridMode ? (compactGrid ? 3 : 4) : 1;
+            int width = gridMode ? (compactGrid ? Math.Max(84, (usableWidth - 24) / 3) : Math.Max(140, (usableWidth - 8 * columns) / columns)) : Math.Max(250, usableWidth - 4);
+            int rowWidth = gridMode ? (width + 8) * columns : width;
             apps.Padding = new Padding(Math.Max(0, (usableWidth - rowWidth) / 2), 0, 0, 0);
             if (members.Length == 0)
             {
@@ -2415,7 +2527,7 @@ namespace DesktopFoldersDirect
                 Action activateItem = delegate {
                     if (childDidDrag) { childDidDrag = false; return; }
                     if (nestedGroup != null) { FolderPanel.ShowOrActivate(nestedGroup.TilePath, tile.RectangleToScreen(tile.ClientRectangle), settings); return; }
-                    try { if (member.IsShellObject) ShellDesktopItems.Open(member.ShellIdentity, Handle); else Process.Start(member.Path); } catch (Exception e) { MessageBox.Show(e.Message, Loc.Get("app.name")); }
+                    try { if (member.IsShellObject) ShellDesktopItems.Open(member.ShellIdentity, Handle); else Process.Start(member.Path); } catch (Exception e) { ThemedDialog.Show(Loc.Get("error.open_item", displayName, e.Message), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 };
                 tile.ItemActivated += delegate { activateItem(); };
                 tile.DragEnter += delegate(object sender, DragEventArgs e) { HandleTileDragEnter(tile, path, pinned, e); };
@@ -2658,7 +2770,7 @@ namespace DesktopFoldersDirect
             VirtualMember member = group.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return;
             List<string> oldPinned = new List<string>(group.Pinned); Point preferredPlacement = PreferredDesktopPoint(group, this);
             try { VirtualMemberState.Restore(member); group.Members.Remove(member); group.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); VirtualMemberState.NotifyChanged(member); }
-            catch (Exception e) { try { VirtualMemberState.Hide(member); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; MessageBox.Show(e.Message, Loc.Get("app.name")); return; }
+            catch (Exception e) { try { VirtualMemberState.Hide(member); } catch { } if (!group.Members.Contains(member)) group.Members.Add(member); group.Pinned = oldPinned; ThemedDialog.Show(ThemedDialog.DescribeFailure(e, "error.restore_item", member.Path), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (settings.DissolveSingleAppGroup && group.Members.Count <= 1)
             {
                 List<string> affected = DissolveGroupRecord(layout, group, this); DataStore.SaveVirtualLayout(layout);
@@ -2767,7 +2879,7 @@ namespace DesktopFoldersDirect
                 if (!String.IsNullOrEmpty(sourceGroup) && sourceGroup != groupId && TransferMember(sourceGroup, paths[0])) { e.Effect = DragDropEffects.Move; return; }
                 foreach (string path in paths) AddMember(path); e.Effect = DragDropEffects.Link; NotifyLayoutChanged();
             }
-            catch (Exception error) { e.Effect = DragDropEffects.None; MessageBox.Show(Loc.Get("error.add_to_collection", error.Message), Loc.Get("app.name")); }
+            catch (Exception error) { e.Effect = DragDropEffects.None; ThemedDialog.Show(ThemedDialog.DescribeFailure(error, "error.add_to_collection", paths), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
         bool TransferMember(string sourceGroupId, string path, string destinationGroupId = null)
         {
@@ -2775,7 +2887,7 @@ namespace DesktopFoldersDirect
             if (from == null || to == null || to.Members.Any(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase))) return false;
             VirtualMember member = from.Members.FirstOrDefault(m => String.Equals(m.Identity, path, StringComparison.OrdinalIgnoreCase)); if (member == null) return false;
             VirtualGroup nested = VirtualLayoutGraph.ResolveMemberGroup(latest, member);
-            if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { MessageBox.Show(Loc.Get("error.cycle_detected"), Loc.Get("app.name")); return false; }
+            if (nested != null && VirtualLayoutGraph.WouldCreateCycle(latest, nested.Id, to.Id)) { ThemedDialog.Show(Loc.Get("error.cycle_detected"), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return false; }
             from.Members.Remove(member); from.Pinned.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); to.Members.Add(member);
             bool dissolveSource = settings.DissolveSingleAppGroup && from.Members.Count <= 1;
             List<string> affected = dissolveSource ? DissolveGroupRecord(latest, from, this) : new List<string>();
@@ -2821,7 +2933,7 @@ namespace DesktopFoldersDirect
             catch (Exception error)
             {
                 try { if (File.Exists(tilePath)) File.Delete(tilePath); } catch { } try { if (!String.IsNullOrEmpty(nested.IconPath) && File.Exists(nested.IconPath)) File.Delete(nested.IconPath); } catch { }
-                MessageBox.Show(Loc.Get("error.create_nested_group", error.Message), Loc.Get("app.name")); return false;
+                ThemedDialog.Show(ThemedDialog.DescribeFailure(error, "error.create_nested_group", sourcePath, targetPath), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); return false;
             }
         }
         protected override void WndProc(ref Message message)
@@ -3162,7 +3274,8 @@ namespace DesktopFoldersDirect
             Color bg = (Parent != null && Parent.BackColor.A > 0) ? Parent.BackColor : BackColor;
             using (Brush bgBrush = new SolidBrush(bg)) e.Graphics.FillRectangle(bgBrush, ClientRectangle);
 
-            Rectangle track = new Rectangle(4, (Height - 22) / 2, Width - 8, 22);
+            int trackHeight = Math.Max(16, Height * 22 / 36);
+            Rectangle track = new Rectangle(4, (Height - trackHeight) / 2, Width - 8, trackHeight);
             Color trackColor = !Enabled ? CollectionTheme.Control : (isChecked
                 ? (pressed ? CollectionTheme.SecondaryText : (hot ? CollectionTheme.Text : CollectionTheme.FocusBlue))
                 : (hot || pressed ? CollectionTheme.ControlActive : CollectionTheme.Control));
@@ -3446,6 +3559,121 @@ namespace DesktopFoldersDirect
         }
     }
 
+    // Dark replacement for MessageBox so errors and confirmations match the collection and
+    // Settings surfaces. Falls back to the native MessageBox if the themed form cannot be built.
+    internal sealed class ThemedDialog : Form
+    {
+        readonly MessageBoxIcon kind;
+        readonly List<Font> ownedFonts = new List<Font>();
+
+        ThemedDialog(string message, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxDefaultButton defaultButton)
+        {
+            kind = icon;
+            Text = String.IsNullOrEmpty(caption) ? Loc.Get("app.name") : caption;
+            FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; ShowInTaskbar = false; KeyPreview = true; DoubleBuffered = true;
+            AutoScaleMode = AutoScaleMode.None; BackColor = CollectionTheme.Background; ForeColor = CollectionTheme.Text;
+            Font = TrackFont(new Font("Segoe UI", 9.5f));
+            float scale = UiScale.Factor;
+            const int width = 460, textLeft = 76, edge = 24;
+            int textWidth = width - textLeft - edge;
+            Font messageFont = TrackFont(new Font("Segoe UI", 9.5f));
+            Size measured = TextRenderer.MeasureText(message ?? "", messageFont, new Size((int)(textWidth * scale), Int32.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+            int messageHeight = Math.Max(20, Math.Min(380, (int)Math.Ceiling(measured.Height / scale) + 4));
+            Label title = new Label { Text = Text, UseMnemonic = false, AutoEllipsis = true, Font = TrackFont(new Font("Segoe UI", 11f, FontStyle.Bold)), ForeColor = CollectionTheme.Text, BackColor = Color.Transparent, Location = new Point(textLeft, 22), Size = new Size(textWidth, 26) };
+            Label body = new Label { Text = message ?? "", UseMnemonic = false, AutoEllipsis = true, Font = messageFont, ForeColor = CollectionTheme.SecondaryText, BackColor = Color.Transparent, Location = new Point(textLeft, 54), Size = new Size(textWidth, messageHeight) };
+            Controls.Add(title); Controls.Add(body);
+
+            List<KeyValuePair<string, DialogResult>> choices = new List<KeyValuePair<string, DialogResult>>();
+            if (buttons == MessageBoxButtons.YesNo || buttons == MessageBoxButtons.YesNoCancel) { choices.Add(new KeyValuePair<string, DialogResult>(Loc.Get("dialog.yes"), DialogResult.Yes)); choices.Add(new KeyValuePair<string, DialogResult>(Loc.Get("dialog.no"), DialogResult.No)); }
+            else choices.Add(new KeyValuePair<string, DialogResult>(Loc.Get("dialog.ok"), DialogResult.OK));
+            if (buttons == MessageBoxButtons.OKCancel || buttons == MessageBoxButtons.YesNoCancel) choices.Add(new KeyValuePair<string, DialogResult>(Loc.Get("dialog.cancel"), DialogResult.Cancel));
+            int defaultIndex = defaultButton == MessageBoxDefaultButton.Button3 ? 2 : (defaultButton == MessageBoxDefaultButton.Button2 ? 1 : 0);
+            if (defaultIndex >= choices.Count) defaultIndex = 0;
+
+            int buttonTop = 54 + messageHeight + 24, right = width - edge;
+            ModernButton defaultControl = null; ModernButton cancelControl = null;
+            for (int index = 0; index < choices.Count; index++)
+            {
+                KeyValuePair<string, DialogResult> choice = choices[index];
+                int buttonWidth = Math.Max(96, (int)Math.Ceiling(TextRenderer.MeasureText(choice.Key, Font).Width / scale) + 36);
+                ModernButton button = new ModernButton(choice.Key, index == 0) { DialogResult = choice.Value, Size = new Size(buttonWidth, 36), Location = new Point(right - buttonWidth, buttonTop), TabIndex = index };
+                right -= buttonWidth + 10; Controls.Add(button);
+                if (index == defaultIndex) defaultControl = button;
+                if (choice.Value == DialogResult.Cancel || (choice.Value == DialogResult.No && cancelControl == null) || choices.Count == 1) cancelControl = button;
+            }
+            AcceptButton = defaultControl; CancelButton = cancelControl;
+            ClientSize = new Size(width, buttonTop + 36 + 22);
+            if (scale > 1.01f) Scale(new SizeF(scale, scale));
+            Shown += delegate { if (defaultControl != null) defaultControl.Focus(); };
+            FormClosed += delegate { foreach (Font font in ownedFonts) font.Dispose(); ownedFonts.Clear(); };
+        }
+
+        Font TrackFont(Font font) { ownedFonts.Add(font); return font; }
+
+        // Turns permission failures into actionable text instead of a raw framework message.
+        // Items on the all-users Public Desktop need elevation to receive the Hidden attribute.
+        internal static string DescribeFailure(Exception error, string fallbackKey, params string[] involvedPaths)
+        {
+            Exception root = error; while (root is TargetInvocationException && root.InnerException != null) root = root.InnerException;
+            bool denied = root is UnauthorizedAccessException || root is System.Security.SecurityException || (root is IOException && (root.HResult & 0xFFFF) == 5);
+            if (denied)
+            {
+                string publicDesktop = "";
+                try { publicDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory); } catch { }
+                string blocked = (involvedPaths ?? new string[0]).FirstOrDefault(p => !String.IsNullOrEmpty(p) && !String.IsNullOrEmpty(publicDesktop) && p.StartsWith(publicDesktop.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+                if (blocked != null) return Loc.Get("error.public_desktop_access", Path.GetFileNameWithoutExtension(blocked));
+                string first = (involvedPaths ?? new string[0]).FirstOrDefault(p => !String.IsNullOrEmpty(p) && p.IndexOf("::", StringComparison.Ordinal) < 0);
+                return Loc.Get("error.access_denied", first != null ? Path.GetFileNameWithoutExtension(first) : Loc.Get("app.name"));
+            }
+            return Loc.Get(fallbackKey, root.Message);
+        }
+
+        internal static DialogResult Show(string message, string caption, MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None, MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+        {
+            ThemedDialog dialog;
+            try { dialog = new ThemedDialog(message, caption, buttons, icon, defaultButton); }
+            catch (Exception error) { DataStore.LogDrag("DIALOG fallback=" + error.Message); return MessageBox.Show(message, caption, buttons, icon, defaultButton); }
+            using (dialog)
+            {
+                Form owner = Form.ActiveForm;
+                if (owner != null && (owner.IsDisposed || !owner.Visible || owner is ThemedDialog)) owner = null;
+                Rectangle reference = owner != null ? owner.Bounds : Screen.FromPoint(Cursor.Position).WorkingArea;
+                Rectangle work = Screen.FromRectangle(reference).WorkingArea;
+                int x = reference.Left + (reference.Width - dialog.Width) / 2, y = reference.Top + (reference.Height - dialog.Height) / 2;
+                dialog.Location = new Point(Math.Max(work.Left + 8, Math.Min(x, work.Right - dialog.Width - 8)), Math.Max(work.Top + 8, Math.Min(y, work.Bottom - dialog.Height - 8)));
+                dialog.TopMost = owner == null || owner.TopMost;
+                return owner != null ? dialog.ShowDialog(owner) : dialog.ShowDialog();
+            }
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            using (System.Drawing.Drawing2D.GraphicsPath path = DrawExtensions.RoundPath(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), UiScale.S(14)))
+            { Region old = Region; Region = new Region(path); if (old != null) old.Dispose(); }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (System.Drawing.Drawing2D.LinearGradientBrush accent = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), 3), CollectionTheme.NeonBlue, CollectionTheme.NeonPurple, 0f))
+                e.Graphics.FillRectangle(accent, 0, 0, Width, UiScale.S(3));
+            using (Pen border = new Pen(CollectionTheme.Border, 1.5f)) e.Graphics.DrawRoundedRectangle(border, new Rectangle(0, 0, Width - 1, Height - 1), UiScale.S(14));
+            Color tone; string glyph;
+            if (kind == MessageBoxIcon.Error) { tone = Color.FromArgb(255, 118, 138); glyph = "×"; }
+            else if (kind == MessageBoxIcon.Warning) { tone = Color.FromArgb(255, 196, 102); glyph = "!"; }
+            else if (kind == MessageBoxIcon.Question) { tone = CollectionTheme.NeonPurple; glyph = "?"; }
+            else { tone = CollectionTheme.NeonBlue; glyph = "i"; }
+            Rectangle badge = new Rectangle(UiScale.S(24), UiScale.S(22), UiScale.S(36), UiScale.S(36));
+            using (Brush fill = new SolidBrush(Color.FromArgb(46, tone))) e.Graphics.FillEllipse(fill, badge);
+            using (Pen ring = new Pen(Color.FromArgb(200, tone), 1.5f)) e.Graphics.DrawEllipse(ring, badge);
+            using (Font mark = new Font("Segoe UI", glyph == "×" ? 16f : 13f, FontStyle.Bold))
+                TextRenderer.DrawText(e.Graphics, glyph, mark, badge, tone, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+        }
+    }
+
     internal sealed class SettingsForm : Form
     {
         readonly DirectDesktopController controller;
@@ -3462,9 +3690,11 @@ namespace DesktopFoldersDirect
             controller = owner;
             Text = Loc.Get("settings.window_title");
             StartPosition = FormStartPosition.CenterScreen;
-            AutoScaleDimensions = new SizeF(96f, 96f);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(600, Math.Min(844, Math.Max(480, Screen.FromPoint(Cursor.Position).WorkingArea.Height - 40)));
+            // Layout is authored in 96-DPI units and scaled once below. Fonts are in points and
+            // already follow system DPI, so unscaled geometry clipped wrapped descriptions at 125%+.
+            float uiScale = UiScale.Factor;
+            AutoScaleMode = AutoScaleMode.None;
+            ClientSize = new Size(600, Math.Min(844, Math.Max(480, (int)((Screen.FromPoint(Cursor.Position).WorkingArea.Height - 40) / uiScale))));
             FormBorderStyle = FormBorderStyle.None;
             Font = new Font("Segoe UI", 9f);
             BackColor = CollectionTheme.Background;
@@ -3478,8 +3708,8 @@ namespace DesktopFoldersDirect
             Panel content = new BufferedPanel { Location = Point.Empty, Size = new Size(552, 716), BackColor = CollectionTheme.Background };
             DarkScrollBar settingsScroll = new DarkScrollBar(viewport, content) { Width = 12, Height = 672, Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right };
             viewport.Controls.Add(content); body.Controls.Add(viewport); body.Controls.Add(settingsScroll);
-            viewport.Resize += delegate { content.Width = Math.Max(300, viewport.ClientSize.Width - 8); settingsScroll.SyncFromTarget(); };
-            body.Resize += delegate { settingsScroll.Bounds = new Rectangle(body.Width - 24, 8, 12, Math.Max(24, body.ClientSize.Height - 16)); settingsScroll.SyncFromTarget(); };
+            viewport.Resize += delegate { content.Width = Math.Max(300, viewport.ClientSize.Width - UiScale.S(8)); settingsScroll.SyncFromTarget(); };
+            body.Resize += delegate { settingsScroll.Bounds = new Rectangle(body.Width - UiScale.S(24), UiScale.S(8), UiScale.S(12), Math.Max(24, body.ClientSize.Height - UiScale.S(16))); settingsScroll.SyncFromTarget(); };
             Controls.Add(body);
 
             // Header draggable bar
@@ -3607,6 +3837,7 @@ namespace DesktopFoldersDirect
             footer.Controls.AddRange(new Control[] { footerLine, tip, cancelBtn, saveBtn });
             Controls.Add(footer);
             foreach (Control row in content.Controls) row.Width = Math.Max(100, content.ClientSize.Width - row.Left);
+            if (uiScale > 1.01f) Scale(new SizeF(uiScale, uiScale));
             BindScrollFocus(content, viewport, settingsScroll);
             AcceptButton = saveBtn;
             CancelButton = cancelBtn;
@@ -3614,7 +3845,7 @@ namespace DesktopFoldersDirect
                 Rectangle area = Screen.FromControl(this).WorkingArea;
                 Size bounded = new Size(Math.Min(Width, area.Width - 32), Math.Min(Height, area.Height - 32));
                 if (bounded != Size) { Size = bounded; Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2); }
-                settingsScroll.Bounds = new Rectangle(body.Width - 24, 8, 12, Math.Max(24, body.ClientSize.Height - 16)); settingsScroll.SyncFromTarget(); settingsScroll.SetValue(0);
+                settingsScroll.Bounds = new Rectangle(body.Width - UiScale.S(24), UiScale.S(8), UiScale.S(12), Math.Max(24, body.ClientSize.Height - UiScale.S(16))); settingsScroll.SyncFromTarget(); settingsScroll.SetValue(0);
                 delaySlider.Focus();
             };
 
@@ -4073,7 +4304,7 @@ namespace DesktopFoldersDirect
                 // unrelated Desktop icon. Explorer chooses the free grid slot.
                 RefreshCache();
             }
-            catch (Exception error) { MessageBox.Show(Loc.Get("error.create_group", error.Message), Loc.Get("app.name")); }
+            catch (Exception error) { ThemedDialog.Show(ThemedDialog.DescribeFailure(error, "error.create_group", first.Path, second.Path), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         SettingsForm activeSettingsForm;
@@ -4121,18 +4352,18 @@ namespace DesktopFoldersDirect
 
         void PrepareUninstall()
         {
-            if (MessageBox.Show(Loc.Get("uninstall.confirm"), Loc.Get("app.name"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            if (ThemedDialog.Show(Loc.Get("uninstall.confirm"), Loc.Get("app.name"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             exiting = true;
             VirtualLayout layout = DataStore.LoadVirtualLayout(); List<VirtualMember> restored; string failure;
             if (!TryRestoreAllMembersForUninstall(layout, out restored, out failure))
             {
-                exiting = false; MessageBox.Show(Loc.Get("uninstall.failed", failure), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Error); return;
+                exiting = false; ThemedDialog.Show(Loc.Get("uninstall.failed", failure), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Error); return;
             }
             try { DataStore.SaveVirtualLayout(new VirtualLayout()); }
             catch (Exception error)
             {
                 for (int index = restored.Count - 1; index >= 0; index--) try { VirtualMemberState.Hide(restored[index]); } catch { }
-                exiting = false; MessageBox.Show(Loc.Get("uninstall.failed", error.Message), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Error); return;
+                exiting = false; ThemedDialog.Show(Loc.Get("uninstall.failed", error.Message), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Error); return;
             }
             foreach (VirtualMember member in restored) try { VirtualMemberState.NotifyChanged(member); } catch { }
             bool cleanupComplete = true;
@@ -4159,7 +4390,7 @@ namespace DesktopFoldersDirect
             }
             cleanupComplete &= RemoveRegistrationsForUninstall(); FolderPanel.NotifyLayoutChanged();
             try { if (Directory.Exists(DataStore.DataDirectory)) Directory.Delete(DataStore.DataDirectory, true); } catch { cleanupComplete = false; }
-            MessageBox.Show(cleanupComplete ? Loc.Get("uninstall.complete") : Loc.Get("uninstall.complete_with_leftovers", DataStore.DataDirectory), Loc.Get("app.name"), MessageBoxButtons.OK, cleanupComplete ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            ThemedDialog.Show(cleanupComplete ? Loc.Get("uninstall.complete") : Loc.Get("uninstall.complete_with_leftovers", DataStore.DataDirectory), Loc.Get("app.name"), MessageBoxButtons.OK, cleanupComplete ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             ExitThread();
         }
 
@@ -4190,7 +4421,7 @@ namespace DesktopFoldersDirect
                     else key.DeleteValue("DesktopFolders", false);
                 }
             }
-            catch { if (showError) MessageBox.Show(Loc.Get("error.startup_registry"), Loc.Get("app.name")); }
+            catch { if (showError) ThemedDialog.Show(Loc.Get("error.startup_registry"), Loc.Get("app.name"), MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         protected override void ExitThreadCore()
@@ -4257,6 +4488,17 @@ namespace DesktopFoldersDirect
                 string testPath = args[1]; Point preferred = new Point(Int32.Parse(args[2]), Int32.Parse(args[3])); bool placed = false;
                 for (int attempt = 0; attempt < 15 && !placed; attempt++) { ExplorerDesktop.NotifyPathChanged(testPath); placed = ExplorerDesktop.TryPlaceAtNearestFreeSlot(testPath, preferred); if (!placed) Thread.Sleep(60); }
                 Environment.Exit(placed ? 0 : 4); return;
+            }
+            if (args != null && args.Length >= 1 && args[0] == "--test-friendly-errors")
+            {
+                Loc.SetLanguage("en");
+                string blocked = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "Shared App.lnk");
+                string own = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Own App.lnk");
+                string publicMessage = ThemedDialog.DescribeFailure(new UnauthorizedAccessException("denied"), "error.create_group", own, blocked);
+                string deniedMessage = ThemedDialog.DescribeFailure(new TargetInvocationException(new UnauthorizedAccessException("denied")), "error.create_group", own);
+                string genericMessage = ThemedDialog.DescribeFailure(new InvalidOperationException("boom"), "error.create_group", blocked);
+                bool valid = publicMessage.Contains("\"Shared App\"") && publicMessage.Contains("Public Desktop") && deniedMessage.Contains("\"Own App\"") && !deniedMessage.Contains("Public Desktop") && genericMessage.Contains("boom") && !genericMessage.Contains("Public Desktop");
+                Environment.Exit(valid ? 0 : 9); return;
             }
             if (args != null && args.Length >= 1 && args[0] == "--test-layout-graph")
             {
