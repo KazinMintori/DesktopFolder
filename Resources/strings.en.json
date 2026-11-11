@@ -78,5 +78,13 @@
   "diagnostics.no_syslistview": "Explorer Desktop SysListView32 not found",
   "diagnostics.scan_summary": "Explorer: {0} icons | Recognized: {1} | Unsupported: {2}",
   "diagnostics.scan_error": "Desktop scan error: {0}",
-  "diagnostics.unsupported_examples": "\r\nUnsupported examples: {0}"
+  "diagnostics.unsupported_examples": "\r\nUnsupported examples: {0}",
+  "dialog.ok": "OK",
+  "dialog.yes": "Yes",
+  "dialog.no": "No",
+  "dialog.cancel": "Cancel",
+  "error.public_desktop_access": "\"{0}\" lives on the shared Public Desktop, which Windows only lets administrators change.\r\n\r\nRun Desktop Folders as administrator to group it, or copy the shortcut to your own Desktop and group the copy.",
+  "error.access_denied": "Windows blocked access to \"{0}\".\r\n\r\nMake sure the file is not read-only, locked by another app, or protected by a security policy, then try again.",
+  "error.open_item": "Unable to open \"{0}\".\r\n\r\n{1}",
+  "error.restore_item": "Unable to restore this item to the Desktop: {0}"
 }

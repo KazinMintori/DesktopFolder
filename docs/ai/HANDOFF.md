@@ -20,6 +20,7 @@ Use this as orientation and verify relevant claims in `src/DesktopFolders.cs` be
 .\build.ps1 -TestBuild -Output DesktopFolders-test.exe
 .\DesktopFolders-test.exe --test-layout-graph
 .\DesktopFolders-test.exe --test-uninstall-restore
+.\DesktopFolders-test.exe --test-friendly-errors
 .\verify-release.ps1
 ```
 
